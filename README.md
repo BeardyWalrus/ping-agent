@@ -11,16 +11,31 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
 - Settings window: host, interval, timeout, colour thresholds, an optional
   **schedule** (fast pings during chosen hours and days, slow pings otherwise),
   and a **Start PingAgent when I sign in to Windows** checkbox.
-- Single portable `PingAgent.exe`. No installer, no runtime to install, no admin rights.
+- Small installer, or a single portable `PingAgent.exe`. No runtime to install, no admin rights.
 
-## Download
+## Download and install
 
-Every push builds a Windows binary. Open the latest run under the repository's
-**Actions** tab, then download the `PingAgent-windows-x64` artifact and unzip it.
+Every push to `main` builds both an installer and a portable exe. Open the latest
+run at https://github.com/BeardyWalrus/ping-agent/actions?query=branch%3Amain and
+download one of the artifacts at the bottom of the page:
+
+- **`PingAgent-Setup`** (recommended): unzip and run `PingAgent-Setup.exe`. It
+  installs per user into `%LOCALAPPDATA%\Programs\PingAgent`, adds a Start menu
+  entry, offers a "start when I sign in" tick box, and launches the app. To
+  update, just run the newer setup: it stops the running copy, replaces it and
+  relaunches it. Uninstall from Windows Settings > Apps; this also removes the
+  start-with-Windows entry but keeps your settings file.
+- **`PingAgent-windows-x64`**: the bare exe, for running from any folder.
+
 Tagged versions (`v*`) are also attached to a GitHub release.
 
-Windows SmartScreen may warn about an unsigned exe the first time you run it;
-choose **More info** then **Run anyway**.
+Windows SmartScreen may warn about an unsigned program the first time you run
+it; choose **More info** then **Run anyway**.
+
+The tray icon registers itself with a fixed identity, so once you drag it from
+the hidden-icons overflow onto the taskbar, Windows remembers that across
+updates. (Windows ties that identity to the exe's location, which is one reason
+to prefer the installer over moving the portable exe around.)
 
 ## Settings
 
@@ -71,7 +86,9 @@ the exe's current location. If you move the exe, untick and re-tick the box.
   not supported yet.
 - The icon is rendered on the fly at the tray's native size using an embedded
   subset of DejaVu Sans Bold (see `assets/digits-LICENSE.txt`).
-- The UI is plain Win32 via [native-windows-gui](https://github.com/gabdube/native-windows-gui).
+- The UI is plain Win32 via [native-windows-gui](https://github.com/gabdube/native-windows-gui);
+  the tray icon itself is driven through `Shell_NotifyIcon` directly so it can carry a GUID.
+- The installer is built with [Inno Setup](https://jrsoftware.org/isinfo.php) from `installer/PingAgent.iss`.
 
 ## Building
 
@@ -81,7 +98,12 @@ Requires a stable Rust toolchain (https://rustup.rs) with the MSVC target on Win
 cargo build --release
 ```
 
-The exe is written to `target\release\PingAgent.exe`.
+The exe is written to `target\release\PingAgent.exe`. To build the installer as
+well, install Inno Setup 6 and run:
+
+```
+ISCC.exe /DMyAppVersion=0.2.0 installer\PingAgent.iss
+```
 
 The platform-independent parts (config, statistics, icon rendering) have unit
 tests that also run on Linux and macOS: `cargo test`. To look at the icon
