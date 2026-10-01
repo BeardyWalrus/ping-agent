@@ -5,8 +5,10 @@
 mod config;
 mod history;
 mod icon;
+mod mqtt;
 mod report;
 mod schedule;
+mod secret;
 mod stats;
 
 #[cfg(windows)]
