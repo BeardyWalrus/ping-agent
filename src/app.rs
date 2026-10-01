@@ -2,12 +2,14 @@
 //! thread, and the settings window.
 
 use std::cell::RefCell;
+use std::os::windows::ffi::OsStrExt;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use chrono::Local;
 use native_windows_gui as nwg;
 use winapi::shared::windef::{HBITMAP, HICON};
 use winapi::um::wingdi::{
@@ -21,8 +23,10 @@ use winapi::um::winuser::{
 
 use crate::autostart;
 use crate::config::{Config, APP_NAME};
+use crate::history::{History, Row};
 use crate::icon::{self, Image, Rgb};
 use crate::ping::Pinger;
+use crate::report;
 use crate::schedule::{self, Day, LocalTime};
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
 use crate::tray::{self, TrayEvent, TrayIcon};
@@ -74,6 +78,7 @@ pub struct App {
     menu_mode: nwg::MenuItem,
     menu_sep1: nwg::MenuSeparator,
     menu_ping_now: nwg::MenuItem,
+    menu_history: nwg::MenuItem,
     menu_settings: nwg::MenuItem,
     menu_sep2: nwg::MenuSeparator,
     menu_exit: nwg::MenuItem,
@@ -98,6 +103,8 @@ pub struct App {
     day_checks: Vec<nwg::CheckBox>,
     idle_label: nwg::Label,
     idle_input: nwg::TextInput,
+    history_label: nwg::Label,
+    history_input: nwg::TextInput,
     autostart_check: nwg::CheckBox,
     path_label: nwg::Label,
     save_button: nwg::Button,
@@ -242,6 +249,10 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .parent(&data.tray_menu)
         .build(&mut data.menu_ping_now)?;
     nwg::MenuItem::builder()
+        .text("&History...")
+        .parent(&data.tray_menu)
+        .build(&mut data.menu_history)?;
+    nwg::MenuItem::builder()
         .text("&Settings...")
         .parent(&data.tray_menu)
         .build(&mut data.menu_settings)?;
@@ -256,7 +267,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     // --- Settings window --------------------------------------------------------
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW)
-        .size((390, 478))
+        .size((390, 516))
         .center(true)
         .title("PingAgent settings")
         .build(&mut data.settings)?;
@@ -384,6 +395,24 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         )
         .parent(&data.settings)
         .build(&mut data.idle_input)?;
+    y += 38;
+
+    nwg::Label::builder()
+        .text("Keep history for (days, 0 = off)")
+        .position((16, y + 3))
+        .size((180, 22))
+        .parent(&data.settings)
+        .build(&mut data.history_label)?;
+    nwg::TextInput::builder()
+        .position((200, y))
+        .size((174, 26))
+        .flags(
+            nwg::TextInputFlags::VISIBLE
+                | nwg::TextInputFlags::TAB_STOP
+                | nwg::TextInputFlags::NUMBER,
+        )
+        .parent(&data.settings)
+        .build(&mut data.history_input)?;
     y += 42;
 
     nwg::CheckBox::builder()
@@ -459,6 +488,8 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
             E::OnMenuItemSelected => {
                 if handle == app.menu_ping_now {
                     app.send(Command::PingNow);
+                } else if handle == app.menu_history {
+                    app.show_history();
                 } else if handle == app.menu_settings {
                     app.show_settings();
                 } else if handle == app.menu_exit {
@@ -644,6 +675,8 @@ impl App {
         }
         self.idle_input
             .set_text(&config.idle_interval_secs.to_string());
+        self.history_input
+            .set_text(&config.history_days.to_string());
         self.update_schedule_controls();
         self.autostart_check
             .set_check_state(if autostart::is_enabled() {
@@ -656,6 +689,36 @@ impl App {
             unsafe { SetForegroundWindow(hwnd) };
         }
         self.host_input.set_focus();
+    }
+
+    /// Build the HTML history page from the CSV log and open it in the browser.
+    fn show_history(&self) {
+        let config = self.state.borrow().config.clone();
+        let Some(dir) = History::default_dir() else {
+            nwg::error_message(
+                APP_NAME,
+                "No settings folder is available, so there is no history.",
+            );
+            return;
+        };
+        let history = History::new(dir.clone());
+        let days = config.history_days.max(1) as i64;
+        let since = Local::now() - chrono::Duration::days(days);
+        let rows: Vec<Row> = history
+            .load_since(since)
+            .into_iter()
+            .filter(|r| r.host == config.host)
+            .collect();
+        let html = report::build_html(&config, &rows, &dir.display().to_string(), Local::now());
+        let path = dir.join("report.html");
+        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, html)) {
+            nwg::error_message(
+                APP_NAME,
+                &format!("Could not write {}: {e}", path.display()),
+            );
+            return;
+        }
+        open_in_browser(&path);
     }
 
     /// Grey out the schedule fields while the schedule checkbox is off.
@@ -696,6 +759,7 @@ impl App {
                 active_end: self.end_input.text(),
                 active_days,
                 idle_interval_secs: parse(&self.idle_input, "Outside-hours interval")?,
+                history_days: parse(&self.history_input, "History days")?,
             };
             cfg.validate()?;
             Ok(cfg.normalized())
@@ -752,6 +816,8 @@ fn worker_loop(
     notice: nwg::NoticeSender,
 ) {
     let mut pinger: Option<Pinger> = None;
+    let history = History::default_dir().map(History::new);
+    let mut last_prune: Option<chrono::NaiveDate> = None;
     loop {
         let cfg = shared.lock().unwrap().clone();
 
@@ -768,6 +834,20 @@ fn worker_loop(
         }
         if let Some(p) = &pinger {
             let outcome = p.ping(&cfg.host, Duration::from_millis(cfg.timeout_ms));
+            if let (Some(h), true) = (&history, cfg.history_days > 0) {
+                let now = Local::now();
+                // Logging must never stop the pinging; a full disk just loses history.
+                let _ = h.append(&Row {
+                    at: now,
+                    host: cfg.host.clone(),
+                    outcome: outcome.clone(),
+                });
+                let today = now.date_naive();
+                if last_prune != Some(today) {
+                    h.prune(cfg.history_days, today);
+                    last_prune = Some(today);
+                }
+            }
             if result_tx.send(outcome).is_err() {
                 return;
             }
@@ -851,6 +931,39 @@ fn create_hicon(img: &Image) -> HICON {
         }
         DeleteObject(color as _);
         hicon
+    }
+}
+
+/// Open a file with its default application (the browser, for .html).
+fn open_in_browser(path: &std::path::Path) {
+    use winapi::um::shellapi::ShellExecuteW;
+    use winapi::um::winuser::SW_SHOWNORMAL;
+    let op: Vec<u16> = "open\0".encode_utf16().collect();
+    let file: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Per the docs, values up to 32 are error codes.
+    if (result as usize) <= 32 {
+        nwg::error_message(
+            APP_NAME,
+            &format!(
+                "Could not open {} in your browser (error {}).",
+                path.display(),
+                result as usize
+            ),
+        );
     }
 }
 

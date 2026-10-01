@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PingAgent history</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series: #2a78d6; --series-wash: rgba(42,120,214,0.12);
+    --warn: #fab219; --bad: #d03b3b; --good: #0ca30c;
+    --hover: rgba(11,11,11,0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --series: #3987e5; --series-wash: rgba(57,135,229,0.16);
+      --hover: rgba(255,255,255,0.06);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series: #3987e5; --series-wash: rgba(57,135,229,0.16);
+    --hover: rgba(255,255,255,0.06);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 16px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  .sub { color: var(--ink-2); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 16px; }
+  .filters .label { color: var(--ink-2); margin-right: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--ink-2);
+    font: inherit; padding: 6px 12px; cursor: pointer; min-width: 44px;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button:hover { background: var(--hover); }
+  .seg button[aria-pressed="true"] { color: var(--ink); font-weight: 600; background: var(--hover); }
+  .seg button:focus-visible { outline: 2px solid var(--series); outline-offset: -2px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .tile .l { color: var(--ink-2); font-size: 13px; }
+  .tile .v { font-size: 26px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+  .tile .v small { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 16px 8px; position: relative; }
+  .card h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  .card .sub { font-size: 13px; margin-bottom: 8px; }
+  .chart-wrap { position: relative; }
+  canvas { display: block; width: 100%; height: 360px; touch-action: none; }
+  .tip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    min-width: 170px; z-index: 2;
+  }
+  .tip .t { color: var(--ink-2); margin-bottom: 4px; }
+  .tip .row { display: flex; justify-content: space-between; gap: 16px; }
+  .tip .row b { font-weight: 600; }
+  .tip .key { display: inline-block; width: 12px; height: 2px; background: var(--series); vertical-align: middle; margin-right: 6px; border-radius: 1px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--ink-2); font-size: 13px; margin: 8px 0 4px; }
+  .legend span::before { content: ""; display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 1px; background: var(--c); }
+  .legend .dot::before { height: 8px; width: 8px; border-radius: 4px; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--ink-2); }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: right; padding: 6px 10px; border-top: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-top: 0; color: var(--ink-2); font-weight: 600; }
+  .empty { padding: 48px 16px; text-align: center; color: var(--ink-2); }
+  footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>PingAgent history</h1>
+    <div class="sub" id="subtitle"></div>
+  </header>
+
+  <div class="filters" role="group" aria-label="Time range">
+    <span class="label">Show last</span>
+    <div class="seg" id="ranges"></div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2 id="chart-title">Round-trip time</h2>
+    <div class="sub" id="chart-sub"></div>
+    <div class="chart-wrap">
+      <canvas id="chart" aria-label="Round-trip time over the selected range" role="img" tabindex="0"></canvas>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="legend">
+      <span style="--c: var(--series)">average per pixel, with min to max band</span>
+      <span style="--c: var(--warn)">amber threshold</span>
+      <span style="--c: var(--bad)">red threshold</span>
+      <span class="dot" style="--c: var(--bad)">timeouts and errors (bottom strip)</span>
+    </div>
+  </section>
+
+  <details>
+    <summary>Hourly table for this range</summary>
+    <table id="table">
+      <thead><tr><th>Hour</th><th>Pings</th><th>Avg ms</th><th>Min ms</th><th>Max ms</th><th>Lost</th><th>Loss %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <footer id="footer"></footer>
+</main>
+
+<script>
+// Injected by PingAgent. DATA rows are [epochSeconds, rttMs]; rttMs is -1 for a
+// timeout and -2 for an error (could not send).
+const META = __META__;
+const DATA = __DATA__;
+</script>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const fmtMs = (v) => v == null ? "–" : (v < 1 ? "<1" : Math.round(v).toLocaleString());
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtTime = (sec, withDate) => {
+    const d = new Date(sec * 1000);
+    const hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    return withDate ? `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${hm}` : hm;
+  };
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const RANGES = [
+    { key: "1h", label: "1 h", secs: 3600 },
+    { key: "6h", label: "6 h", secs: 6 * 3600 },
+    { key: "24h", label: "24 h", secs: 24 * 3600 },
+    { key: "7d", label: "7 d", secs: 7 * 86400 },
+    { key: "all", label: "All", secs: null },
+  ];
+  const latest = DATA.length ? DATA[DATA.length - 1][0] : Math.floor(Date.now() / 1000);
+  const earliest = DATA.length ? DATA[0][0] : latest - 3600;
+  let rangeKey = (() => {
+    try { return localStorage.getItem("pingagent.range") || "24h"; } catch { return "24h"; }
+  })();
+  const stored = RANGES.find(r => r.key === rangeKey) ? rangeKey : "24h";
+  rangeKey = stored;
+
+  $("#subtitle").textContent = `${META.host} · amber from ${META.warn_ms} ms, red from ${META.bad_ms} ms · keeping ${META.history_days} day${META.history_days === 1 ? "" : "s"}`;
+  $("#footer").textContent = `Generated ${META.generated} by PingAgent ${META.version}. Data: ${META.history_dir}`;
+
+  // ---- filters -------------------------------------------------------------
+  const seg = $("#ranges");
+  for (const r of RANGES) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = r.label; b.dataset.key = r.key;
+    b.setAttribute("aria-pressed", String(r.key === rangeKey));
+    b.addEventListener("click", () => { rangeKey = r.key; try { localStorage.setItem("pingagent.range", r.key); } catch {} render(); });
+    seg.appendChild(b);
+  }
+
+  function slice() {
+    const r = RANGES.find(x => x.key === rangeKey);
+    const from = r.secs == null ? earliest : latest - r.secs;
+    let lo = 0, hi = DATA.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (DATA[m][0] < from) lo = m + 1; else hi = m; }
+    return { rows: DATA.slice(lo), from, to: latest };
+  }
+
+  // ---- stats -------------------------------------------------------------
+  function stats(rows) {
+    const vals = [];
+    let lost = 0;
+    for (const [, v] of rows) { if (v >= 0) vals.push(v); else lost++; }
+    vals.sort((a, b) => a - b);
+    const q = (p) => vals.length ? vals[Math.min(vals.length - 1, Math.floor(p * vals.length))] : null;
+    const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    return { n: rows.length, replies: vals.length, lost, avg, p50: q(0.5), p95: q(0.95), max: vals.length ? vals[vals.length - 1] : null,
+             loss: rows.length ? lost / rows.length * 100 : 0 };
+  }
+
+  function tile(label, value, unit) {
+    const d = document.createElement("div"); d.className = "tile";
+    const l = document.createElement("div"); l.className = "l"; l.textContent = label;
+    const v = document.createElement("div"); v.className = "v"; v.textContent = value;
+    if (unit) { const s = document.createElement("small"); s.textContent = unit; v.appendChild(s); }
+    d.append(l, v); return d;
+  }
+
+  // ---- chart -------------------------------------------------------------
+  const canvas = $("#chart"), tip = $("#tip");
+  const ctx = canvas.getContext("2d");
+  let view = null; // last layout, for hover
+
+  function niceCeil(v) {
+    if (v <= 0) return 10;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 2, 2.5, 5, 10]) { if (m * p >= v) return m * p; }
+    return 10 * p;
+  }
+  function niceStep(range, maxTicks) {
+    const raw = range / maxTicks;
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    for (const m of [1, 2, 2.5, 5, 10]) { if (m * p >= raw) return m * p; }
+    return 10 * p;
+  }
+  function timeTicks(from, to, width) {
+    const span = to - from;
+    const steps = [60, 300, 600, 900, 1800, 3600, 7200, 3*3600, 6*3600, 12*3600, 86400, 2*86400, 7*86400];
+    const want = Math.max(3, Math.floor(width / 110));
+    let step = steps.find(s => span / s <= want) || steps[steps.length - 1];
+    const ticks = [];
+    const tz = new Date(from * 1000).getTimezoneOffset() * 60;
+    let t = Math.ceil((from - tz) / step) * step + tz;
+    for (; t <= to; t += step) ticks.push(t);
+    return { ticks, withDate: span > 86400 };
+  }
+
+  function layout(rows, from, to) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const pad = { l: 52, r: 16, t: 22, b: 44 };
+    const plotW = Math.max(10, W - pad.l - pad.r), plotH = Math.max(10, H - pad.t - pad.b);
+    const strip = 10; // bottom strip for timeouts
+    const lineH = plotH - strip - 4;
+
+    // Bucket per pixel column: avg, min, max, timeouts.
+    const buckets = new Array(plotW).fill(null);
+    const span = Math.max(1, to - from);
+    for (const [t, v] of rows) {
+      const x = Math.min(plotW - 1, Math.max(0, Math.floor((t - from) / span * plotW)));
+      let b = buckets[x];
+      if (!b) b = buckets[x] = { sum: 0, n: 0, min: Infinity, max: -Infinity, lost: 0, t0: t, t1: t };
+      b.t1 = t;
+      if (v >= 0) { b.sum += v; b.n++; if (v < b.min) b.min = v; if (v > b.max) b.max = v; } else b.lost++;
+    }
+    const vals = [];
+    for (const b of buckets) if (b && b.n) vals.push(b.max);
+    vals.sort((a, b) => a - b);
+    const p99 = vals.length ? vals[Math.floor(0.99 * (vals.length - 1))] : 0;
+    const yMax = niceCeil(Math.max(p99 * 1.25, META.bad_ms * 1.2, 10));
+    return { W, H, pad, plotW, plotH, lineH, strip, buckets, yMax, from, to, span };
+  }
+
+  function draw(v) {
+    const { W, H, pad, plotW, plotH, lineH, strip, buckets, yMax, from, to } = v;
+    const col = { grid: css("--grid"), axis: css("--axis"), muted: css("--muted"), ink2: css("--ink-2"),
+                  series: css("--series"), wash: css("--series-wash"), warn: css("--warn"), bad: css("--bad"), surface: css("--surface") };
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "12px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    const y = (ms) => pad.t + lineH - Math.min(ms, yMax) / yMax * lineH;
+
+    // Grid + y ticks.
+    const step = niceStep(yMax, 5);
+    ctx.lineWidth = 1; ctx.strokeStyle = col.grid; ctx.fillStyle = col.muted; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let t = 0; t <= yMax + 1e-9; t += step) {
+      const yy = Math.round(y(t)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(pad.l + plotW, yy); ctx.stroke();
+      ctx.fillText(t.toLocaleString(), pad.l - 8, yy);
+    }
+    ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+    ctx.fillText("ms", pad.l - 8, pad.t - 8);
+
+    // Threshold reference lines (status colours, hairline, labelled in ink).
+    for (const [ms, c, label] of [[META.warn_ms, col.warn, "amber"], [META.bad_ms, col.bad, "red"]]) {
+      if (ms > yMax) continue;
+      const yy = Math.round(y(ms)) + 0.5;
+      ctx.strokeStyle = c; ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(pad.l + plotW, yy); ctx.stroke();
+      // Label on a small surface-coloured halo so the data line never runs through the text.
+      const text = `${label} ${ms} ms`;
+      const tw = ctx.measureText(text).width;
+      ctx.fillStyle = col.surface; ctx.fillRect(pad.l + plotW - 8 - tw, yy - 17, tw + 8, 15);
+      ctx.fillStyle = col.ink2; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillText(text, pad.l + plotW - 4, yy - 3);
+    }
+
+    // Baseline + x ticks.
+    const base = pad.t + plotH + 0.5;
+    ctx.strokeStyle = col.axis; ctx.beginPath(); ctx.moveTo(pad.l, base); ctx.lineTo(pad.l + plotW, base); ctx.stroke();
+    const { ticks, withDate } = timeTicks(from, to, plotW);
+    ctx.fillStyle = col.muted; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (const t of ticks) {
+      const x = pad.l + (t - from) / (to - from) * plotW;
+      ctx.strokeStyle = col.grid; ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, base); ctx.lineTo(Math.round(x) + 0.5, base + 4); ctx.stroke();
+      ctx.fillText(fmtTime(t, withDate), x, base + 8);
+    }
+
+    // Min–max band (series wash) then average line (2px, round joins).
+    ctx.fillStyle = col.wash;
+    let run = [];
+    const flush = () => {
+      if (run.length < 1) { run = []; return; }
+      ctx.beginPath();
+      run.forEach(([x, b], i) => { const yy = y(b.max); i ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); });
+      for (let i = run.length - 1; i >= 0; i--) ctx.lineTo(run[i][0], y(run[i][1].min));
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.strokeStyle = col.series; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      run.forEach(([x, b], i) => { const yy = y(b.sum / b.n); i ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); });
+      ctx.stroke();
+      if (run.length === 1) { // a lone point: draw an 8px marker so it is visible
+        const [x, b] = run[0];
+        ctx.beginPath(); ctx.fillStyle = col.series; ctx.arc(x, y(b.sum / b.n), 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = col.wash;
+      }
+      run = [];
+    };
+    let gapRun = 0;
+    for (let i = 0; i < plotW; i++) {
+      const b = buckets[i];
+      if (b && b.n) { run.push([pad.l + i + 0.5, b]); gapRun = 0; }
+      else if (run.length) { gapRun++; if (gapRun > Math.max(3, plotW / 60)) flush(); }
+    }
+    flush();
+
+    // Timeout / error strip: a 2px-wide mark per affected column in the critical status colour.
+    ctx.fillStyle = col.bad;
+    for (let i = 0; i < plotW; i++) {
+      const b = buckets[i];
+      if (b && b.lost) ctx.fillRect(pad.l + i, pad.t + plotH - strip, 1.5, strip);
+    }
+  }
+
+  // ---- hover ---------------------------------------------------------------
+  let hoverX = null;
+  function showHover(clientX) {
+    if (!view) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const { pad, plotW, buckets } = view;
+    let i = Math.round(x - pad.l);
+    if (i < 0 || i >= plotW) { hideHover(); return; }
+    // Snap to the nearest non-empty bucket within 12px.
+    let best = -1;
+    for (let d = 0; d <= 12; d++) {
+      if (i - d >= 0 && buckets[i - d]) { best = i - d; break; }
+      if (i + d < plotW && buckets[i + d]) { best = i + d; break; }
+    }
+    if (best < 0) { hideHover(); return; }
+    hoverX = best;
+    draw(view);
+    const b = buckets[best];
+    const cx = pad.l + best + 0.5;
+    ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(Math.round(cx) + 0.5, pad.t); ctx.lineTo(Math.round(cx) + 0.5, pad.t + view.plotH); ctx.stroke();
+    if (b.n) {
+      const yy = pad.t + view.lineH - Math.min(b.sum / b.n, view.yMax) / view.yMax * view.lineH;
+      ctx.beginPath(); ctx.fillStyle = css("--surface"); ctx.arc(cx, yy, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.fillStyle = css("--series"); ctx.arc(cx, yy, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    // Tooltip content (textContent only).
+    tip.replaceChildren();
+    const t = document.createElement("div"); t.className = "t";
+    const span = view.to - view.from;
+    t.textContent = b.t0 === b.t1 ? fmtTime(b.t0, span > 86400) : `${fmtTime(b.t0, span > 86400)} to ${fmtTime(b.t1, false)}`;
+    tip.appendChild(t);
+    const row = (label, value, keyed) => {
+      const r = document.createElement("div"); r.className = "row";
+      const l = document.createElement("span"); if (keyed) { const k = document.createElement("i"); k.className = "key"; l.appendChild(k); } l.appendChild(document.createTextNode(label));
+      const v = document.createElement("b"); v.textContent = value;
+      r.append(v, l); tip.appendChild(r);
+    };
+    if (b.n) {
+      row("average", fmtMs(b.sum / b.n) + " ms", true);
+      if (b.n > 1) { row("min", fmtMs(b.min) + " ms"); row("max", fmtMs(b.max) + " ms"); row("pings", String(b.n)); }
+    }
+    if (b.lost) row("lost", String(b.lost));
+    tip.style.display = "block";
+    const tw = tip.offsetWidth;
+    const left = cx + 14 + tw > canvas.clientWidth ? cx - 14 - tw : cx + 14;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${pad.t + 8}px`;
+  }
+  function hideHover() { hoverX = null; tip.style.display = "none"; if (view) draw(view); }
+  canvas.addEventListener("pointermove", (e) => showHover(e.clientX));
+  canvas.addEventListener("pointerleave", hideHover);
+  canvas.addEventListener("keydown", (e) => {
+    if (!view) return;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const dir = e.key === "ArrowLeft" ? -1 : 1;
+      let i = hoverX == null ? (dir < 0 ? view.plotW - 1 : 0) : hoverX + dir;
+      while (i >= 0 && i < view.plotW && !view.buckets[i]) i += dir;
+      if (i >= 0 && i < view.plotW) showHover(canvas.getBoundingClientRect().left + view.pad.l + i);
+    } else if (e.key === "Escape") hideHover();
+  });
+
+  // ---- table ---------------------------------------------------------------
+  function fillTable(rows) {
+    const tb = $("#table tbody"); tb.replaceChildren();
+    const byHour = new Map();
+    for (const [t, v] of rows) {
+      const h = t - (t % 3600);
+      let b = byHour.get(h); if (!b) byHour.set(h, b = { n: 0, sum: 0, cnt: 0, min: Infinity, max: -Infinity, lost: 0 });
+      b.n++; if (v >= 0) { b.sum += v; b.cnt++; b.min = Math.min(b.min, v); b.max = Math.max(b.max, v); } else b.lost++;
+    }
+    for (const [h, b] of [...byHour.entries()].sort((a, c) => c[0] - a[0])) {
+      const tr = document.createElement("tr");
+      const cells = [fmtTime(h, true), String(b.n), b.cnt ? fmtMs(b.sum / b.cnt) : "–", b.cnt ? fmtMs(b.min) : "–", b.cnt ? fmtMs(b.max) : "–", String(b.lost), (b.lost / b.n * 100).toFixed(1)];
+      for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
+      tb.appendChild(tr);
+    }
+  }
+
+  // ---- render ----------------------------------------------------------------
+  function render() {
+    for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.key === rangeKey));
+    const { rows, from, to } = slice();
+    const s = stats(rows);
+    const tiles = $("#tiles"); tiles.replaceChildren();
+    tiles.append(
+      tile("Average", fmtMs(s.avg), "ms"),
+      tile("Median", fmtMs(s.p50), "ms"),
+      tile("95th percentile", fmtMs(s.p95), "ms"),
+      tile("Worst", fmtMs(s.max), "ms"),
+      tile("Packet loss", s.n ? s.loss.toFixed(s.loss && s.loss < 10 ? 1 : 0) : "–", "%"),
+      tile("Pings", s.n.toLocaleString(), ""),
+    );
+    const r = RANGES.find(x => x.key === rangeKey);
+    $("#chart-sub").textContent = rows.length
+      ? `${fmtTime(from, true)} to ${fmtTime(to, true)} · ${s.lost.toLocaleString()} of ${s.n.toLocaleString()} pings got no reply`
+      : "No pings recorded in this range yet.";
+    view = rows.length ? layout(rows, from, to) : null;
+    if (view) draw(view); else { const dpr = window.devicePixelRatio || 1; canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr; }
+    hideHover();
+    fillTable(rows);
+  }
+
+  window.addEventListener("resize", () => { if (view) { const { rows, from, to } = slice(); view = layout(rows, from, to); draw(view); } });
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+  render();
+})();
+</script>
+</body>
+</html>

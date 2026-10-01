@@ -13,6 +13,7 @@ pub const MIN_INTERVAL_SECS: u64 = 1;
 pub const MAX_INTERVAL_SECS: u64 = 3600;
 pub const MIN_TIMEOUT_MS: u64 = 100;
 pub const MAX_TIMEOUT_MS: u64 = 10_000;
+pub const MAX_HISTORY_DAYS: u64 = 365;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -39,6 +40,8 @@ pub struct Config {
     pub active_days: Vec<Day>,
     /// Seconds between pings outside the active window.
     pub idle_interval_secs: u64,
+    /// Days of ping history to keep on disk. 0 turns history off.
+    pub history_days: u64,
 }
 
 impl Default for Config {
@@ -54,6 +57,7 @@ impl Default for Config {
             active_end: "18:00".to_string(),
             active_days: Day::WEEKDAYS.to_vec(),
             idle_interval_secs: 60,
+            history_days: 7,
         }
     }
 }
@@ -131,6 +135,11 @@ impl Config {
         if self.schedule_enabled && self.active_days.is_empty() {
             return Err("Pick at least one day for the schedule.".into());
         }
+        if self.history_days > MAX_HISTORY_DAYS {
+            return Err(format!(
+                "History can be kept for at most {MAX_HISTORY_DAYS} days."
+            ));
+        }
         Ok(())
     }
 
@@ -198,6 +207,7 @@ mod tests {
         .unwrap();
         assert!(!cfg.schedule_enabled);
         assert_eq!(cfg.idle_interval_secs, 60);
+        assert_eq!(cfg.history_days, 7);
         assert_eq!(cfg.active_days, Day::WEEKDAYS.to_vec());
     }
 
