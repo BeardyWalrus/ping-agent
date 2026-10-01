@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::mqtt::MqttConfig;
 use crate::schedule::{self, Day};
 
 pub const APP_NAME: &str = "PingAgent";
@@ -42,6 +43,8 @@ pub struct Config {
     pub idle_interval_secs: u64,
     /// Days of ping history to keep on disk. 0 turns history off.
     pub history_days: u64,
+    /// Home Assistant (MQTT) publishing.
+    pub mqtt: MqttConfig,
 }
 
 impl Default for Config {
@@ -58,6 +61,7 @@ impl Default for Config {
             active_days: Day::WEEKDAYS.to_vec(),
             idle_interval_secs: 60,
             history_days: 7,
+            mqtt: MqttConfig::default(),
         }
     }
 }
@@ -208,6 +212,8 @@ mod tests {
         assert!(!cfg.schedule_enabled);
         assert_eq!(cfg.idle_interval_secs, 60);
         assert_eq!(cfg.history_days, 7);
+        assert!(!cfg.mqtt.enabled);
+        assert_eq!(cfg.mqtt.port, 1883);
         assert_eq!(cfg.active_days, Day::WEEKDAYS.to_vec());
     }
 
