@@ -15,19 +15,21 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
 
 ## Download and install
 
-Every push to `main` builds both an installer and a portable exe. Open the latest
-run at https://github.com/BeardyWalrus/ping-agent/actions?query=branch%3Amain and
-download one of the artifacts at the bottom of the page:
+Every merge to `main` publishes a GitHub release, so the newest installer is
+always at this address:
 
-- **`PingAgent-Setup`** (recommended): unzip and run `PingAgent-Setup.exe`. It
-  installs per user into `%LOCALAPPDATA%\Programs\PingAgent`, adds a Start menu
-  entry, offers a "start when I sign in" tick box, and launches the app. To
-  update, just run the newer setup: it stops the running copy, replaces it and
-  relaunches it. Uninstall from Windows Settings > Apps; this also removes the
-  start-with-Windows entry but keeps your settings file.
-- **`PingAgent-windows-x64`**: the bare exe, for running from any folder.
+**https://github.com/BeardyWalrus/ping-agent/releases/latest/download/PingAgent-Setup.exe**
 
-Tagged versions (`v*`) are also attached to a GitHub release.
+Run it. It installs per user into `%LOCALAPPDATA%\Programs\PingAgent`, adds a
+Start menu entry, offers a "start when I sign in" tick box, and launches the
+app. To update, run the newer setup: it stops the running copy, replaces it and
+relaunches it. Uninstall from Windows Settings > Apps; this also removes the
+start-with-Windows entry but keeps your settings file.
+
+The bare exe for running from any folder is next to it:
+https://github.com/BeardyWalrus/ping-agent/releases/latest/download/PingAgent.exe
+
+All releases, with notes, are at https://github.com/BeardyWalrus/ping-agent/releases.
 
 Windows SmartScreen may warn about an unsigned program the first time you run
 it; choose **More info** then **Run anyway**.
