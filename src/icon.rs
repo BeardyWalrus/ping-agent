@@ -262,7 +262,7 @@ fn encode_dib(img: &Image) -> Vec<u8> {
 /// Premultiplied BGRA bytes, top-down, as needed for a 32-bit DIB section on Windows.
 pub fn to_premultiplied_bgra(img: &Image) -> Vec<u8> {
     let mut out = Vec::with_capacity(img.rgba.len());
-    for p in img.rgba.chunks_exact(4) {
+    for p in img.rgba.as_chunks::<4>().0 {
         let a = p[3] as u32;
         let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
         out.extend_from_slice(&[pm(p[2]), pm(p[1]), pm(p[0]), p[3]]);
