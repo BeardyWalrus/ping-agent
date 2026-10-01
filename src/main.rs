@@ -4,6 +4,7 @@
 
 mod config;
 mod icon;
+mod schedule;
 mod stats;
 
 #[cfg(windows)]

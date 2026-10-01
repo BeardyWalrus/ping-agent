@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::schedule::{self, Day};
+
 pub const APP_NAME: &str = "PingAgent";
 pub const DEFAULT_HOST: &str = "192.168.86.1";
 
@@ -25,6 +27,18 @@ pub struct Config {
     pub warn_ms: u64,
     /// Round-trip times at or above this are shown in the "bad" colour.
     pub bad_ms: u64,
+    /// When true, `interval_secs` applies only inside the active window on
+    /// `active_days`; `idle_interval_secs` applies the rest of the time.
+    pub schedule_enabled: bool,
+    /// Start of the active window, local time, "HH:MM" (24-hour).
+    pub active_start: String,
+    /// End of the active window, local time, "HH:MM". Earlier than the start
+    /// means the window runs past midnight.
+    pub active_end: String,
+    /// Days on which the active window applies.
+    pub active_days: Vec<Day>,
+    /// Seconds between pings outside the active window.
+    pub idle_interval_secs: u64,
 }
 
 impl Default for Config {
@@ -35,6 +49,11 @@ impl Default for Config {
             timeout_ms: 1000,
             warn_ms: 50,
             bad_ms: 150,
+            schedule_enabled: false,
+            active_start: "08:00".to_string(),
+            active_end: "18:00".to_string(),
+            active_days: Day::WEEKDAYS.to_vec(),
+            idle_interval_secs: 60,
         }
     }
 }
@@ -102,11 +121,29 @@ impl Config {
         if self.warn_ms > self.bad_ms {
             return Err("The amber threshold must not be higher than the red threshold.".into());
         }
+        if !(MIN_INTERVAL_SECS..=MAX_INTERVAL_SECS).contains(&self.idle_interval_secs) {
+            return Err(format!(
+                "The outside-hours interval must be between {MIN_INTERVAL_SECS} and {MAX_INTERVAL_SECS} seconds."
+            ));
+        }
+        schedule::parse_hhmm(&self.active_start).map_err(|e| format!("Active hours start: {e}"))?;
+        schedule::parse_hhmm(&self.active_end).map_err(|e| format!("Active hours end: {e}"))?;
+        if self.schedule_enabled && self.active_days.is_empty() {
+            return Err("Pick at least one day for the schedule.".into());
+        }
         Ok(())
     }
 
-    fn normalized(mut self) -> Config {
+    /// Trim text fields and store times in canonical "HH:MM" form.
+    pub fn normalized(mut self) -> Config {
         self.host = self.host.trim().to_string();
+        if let Ok(m) = schedule::parse_hhmm(&self.active_start) {
+            self.active_start = schedule::format_hhmm(m);
+        }
+        if let Ok(m) = schedule::parse_hhmm(&self.active_end) {
+            self.active_end = schedule::format_hhmm(m);
+        }
+        self.active_days.dedup();
         self
     }
 }
@@ -146,6 +183,28 @@ mod tests {
         assert!(Config::from_json(r#"{"host": ""}"#).is_err());
         assert!(Config::from_json(r#"{"interval_secs": 0}"#).is_err());
         assert!(Config::from_json(r#"{"warn_ms": 500, "bad_ms": 100}"#).is_err());
+        assert!(Config::from_json(r#"{"active_start": "8am"}"#).is_err());
+        assert!(Config::from_json(r#"{"idle_interval_secs": 0}"#).is_err());
+        assert!(Config::from_json(r#"{"schedule_enabled": true, "active_days": []}"#).is_err());
+        assert!(Config::from_json(r#"{"active_days": ["Monday"]}"#).is_err());
         assert!(Config::from_json("not json").is_err());
+    }
+
+    #[test]
+    fn old_config_without_schedule_fields_still_loads() {
+        let cfg = Config::from_json(
+            r#"{"host":"10.0.0.1","interval_secs":5,"timeout_ms":1000,"warn_ms":50,"bad_ms":150}"#,
+        )
+        .unwrap();
+        assert!(!cfg.schedule_enabled);
+        assert_eq!(cfg.idle_interval_secs, 60);
+        assert_eq!(cfg.active_days, Day::WEEKDAYS.to_vec());
+    }
+
+    #[test]
+    fn times_are_canonicalised() {
+        let cfg = Config::from_json(r#"{"active_start": "8:5", "active_end": " 17:30 "}"#).unwrap();
+        assert_eq!(cfg.active_start, "08:05");
+        assert_eq!(cfg.active_end, "17:30");
     }
 }

@@ -23,6 +23,7 @@ use crate::autostart;
 use crate::config::{Config, APP_NAME};
 use crate::icon::{self, Image, Rgb};
 use crate::ping::Pinger;
+use crate::schedule::{self, Day, LocalTime};
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
 
 /// Number of recent results kept for the average / loss figures.
@@ -69,6 +70,7 @@ pub struct App {
     tray_menu: nwg::Menu,
     menu_status: nwg::MenuItem,
     menu_stats: nwg::MenuItem,
+    menu_mode: nwg::MenuItem,
     menu_sep1: nwg::MenuSeparator,
     menu_ping_now: nwg::MenuItem,
     menu_settings: nwg::MenuItem,
@@ -86,6 +88,15 @@ pub struct App {
     warn_input: nwg::TextInput,
     bad_label: nwg::Label,
     bad_input: nwg::TextInput,
+    schedule_check: nwg::CheckBox,
+    hours_label: nwg::Label,
+    start_input: nwg::TextInput,
+    to_label: nwg::Label,
+    end_input: nwg::TextInput,
+    hours_hint: nwg::Label,
+    day_checks: Vec<nwg::CheckBox>,
+    idle_label: nwg::Label,
+    idle_input: nwg::TextInput,
     autostart_check: nwg::CheckBox,
     path_label: nwg::Label,
     save_button: nwg::Button,
@@ -208,6 +219,11 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .disabled(true)
         .parent(&data.tray_menu)
         .build(&mut data.menu_stats)?;
+    nwg::MenuItem::builder()
+        .text("pinging")
+        .disabled(true)
+        .parent(&data.tray_menu)
+        .build(&mut data.menu_mode)?;
     nwg::MenuSeparator::builder()
         .parent(&data.tray_menu)
         .build(&mut data.menu_sep1)?;
@@ -230,7 +246,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     // --- Settings window --------------------------------------------------------
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW)
-        .size((380, 312))
+        .size((390, 478))
         .center(true)
         .title("PingAgent settings")
         .build(&mut data.settings)?;
@@ -272,7 +288,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         nwg::Label::builder()
             .text(text)
             .position((16, y + 3))
-            .size((176, 22))
+            .size((180, 22))
             .parent(&data.settings)
             .build(label)?;
         let mut flags = nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP;
@@ -281,17 +297,89 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         }
         nwg::TextInput::builder()
             .position((200, y))
-            .size((164, 26))
+            .size((174, 26))
             .flags(flags)
             .parent(&data.settings)
             .build(input)?;
         y += 38;
     }
 
+    // Schedule group.
+    nwg::CheckBox::builder()
+        .text("Use a schedule: ping faster during these hours")
+        .position((16, y + 2))
+        .size((358, 24))
+        .parent(&data.settings)
+        .build(&mut data.schedule_check)?;
+    y += 34;
+
+    nwg::Label::builder()
+        .text("Active hours")
+        .position((16, y + 3))
+        .size((100, 22))
+        .parent(&data.settings)
+        .build(&mut data.hours_label)?;
+    nwg::TextInput::builder()
+        .position((120, y))
+        .size((64, 26))
+        .flags(nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP)
+        .parent(&data.settings)
+        .build(&mut data.start_input)?;
+    nwg::Label::builder()
+        .text("to")
+        .position((190, y + 3))
+        .size((22, 22))
+        .h_align(nwg::HTextAlign::Center)
+        .parent(&data.settings)
+        .build(&mut data.to_label)?;
+    nwg::TextInput::builder()
+        .position((216, y))
+        .size((64, 26))
+        .flags(nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP)
+        .parent(&data.settings)
+        .build(&mut data.end_input)?;
+    nwg::Label::builder()
+        .text("24-hour, e.g. 08:00")
+        .position((288, y + 3))
+        .size((90, 22))
+        .parent(&data.settings)
+        .build(&mut data.hours_hint)?;
+    y += 36;
+
+    for (i, day) in Day::ALL.iter().enumerate() {
+        let mut check = nwg::CheckBox::default();
+        nwg::CheckBox::builder()
+            .text(day.short_name())
+            .position((16 + i as i32 * 51, y))
+            .size((50, 24))
+            .parent(&data.settings)
+            .build(&mut check)?;
+        data.day_checks.push(check);
+    }
+    y += 34;
+
+    nwg::Label::builder()
+        .text("Outside those hours, ping every (seconds)")
+        .position((16, y + 3))
+        .size((180, 22))
+        .parent(&data.settings)
+        .build(&mut data.idle_label)?;
+    nwg::TextInput::builder()
+        .position((200, y))
+        .size((174, 26))
+        .flags(
+            nwg::TextInputFlags::VISIBLE
+                | nwg::TextInputFlags::TAB_STOP
+                | nwg::TextInputFlags::NUMBER,
+        )
+        .parent(&data.settings)
+        .build(&mut data.idle_input)?;
+    y += 42;
+
     nwg::CheckBox::builder()
         .text("Start PingAgent when I sign in to Windows")
         .position((16, y + 2))
-        .size((348, 24))
+        .size((358, 24))
         .parent(&data.settings)
         .build(&mut data.autostart_check)?;
     y += 36;
@@ -303,7 +391,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     nwg::Label::builder()
         .text(&path_text)
         .position((16, y))
-        .size((348, 20))
+        .size((358, 20))
         .flags(nwg::LabelFlags::VISIBLE | nwg::LabelFlags::ELIPSIS)
         .parent(&data.settings)
         .build(&mut data.path_label)?;
@@ -311,13 +399,13 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
 
     nwg::Button::builder()
         .text("Save")
-        .position((196, y))
+        .position((206, y))
         .size((80, 30))
         .parent(&data.settings)
         .build(&mut data.save_button)?;
     nwg::Button::builder()
         .text("Cancel")
-        .position((284, y))
+        .position((294, y))
         .size((80, 30))
         .parent(&data.settings)
         .build(&mut data.cancel_button)?;
@@ -362,6 +450,8 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
                 app.save_settings();
             } else if handle == app.cancel_button {
                 app.settings.set_visible(false);
+            } else if handle == app.schedule_check {
+                app.update_schedule_controls();
             }
         }
         // OnWindowClose: nwg hides the window by default, which is what we want.
@@ -490,6 +580,8 @@ impl App {
 
         set_menu_item_text(&self.menu_status, &status, true);
         set_menu_item_text(&self.menu_stats, &stats_line, true);
+        let mode_line = format!("Pinging {}", schedule::describe(&config, LocalTime::now()));
+        set_menu_item_text(&self.menu_mode, &mode_line, true);
     }
 
     fn show_menu(&self) {
@@ -505,6 +597,16 @@ impl App {
         self.timeout_input.set_text(&config.timeout_ms.to_string());
         self.warn_input.set_text(&config.warn_ms.to_string());
         self.bad_input.set_text(&config.bad_ms.to_string());
+        self.schedule_check
+            .set_check_state(check_state(config.schedule_enabled));
+        self.start_input.set_text(&config.active_start);
+        self.end_input.set_text(&config.active_end);
+        for (check, day) in self.day_checks.iter().zip(Day::ALL.iter()) {
+            check.set_check_state(check_state(config.active_days.contains(day)));
+        }
+        self.idle_input
+            .set_text(&config.idle_interval_secs.to_string());
+        self.update_schedule_controls();
         self.autostart_check
             .set_check_state(if autostart::is_enabled() {
                 nwg::CheckBoxState::Checked
@@ -518,6 +620,17 @@ impl App {
         self.host_input.set_focus();
     }
 
+    /// Grey out the schedule fields while the schedule checkbox is off.
+    fn update_schedule_controls(&self) {
+        let on = self.schedule_check.check_state() == nwg::CheckBoxState::Checked;
+        self.start_input.set_enabled(on);
+        self.end_input.set_enabled(on);
+        self.idle_input.set_enabled(on);
+        for check in &self.day_checks {
+            check.set_enabled(on);
+        }
+    }
+
     fn save_settings(&self) {
         let parse = |input: &nwg::TextInput, what: &str| -> Result<u64, String> {
             input
@@ -527,15 +640,27 @@ impl App {
                 .map_err(|_| format!("{what} must be a whole number."))
         };
         let parsed = (|| -> Result<Config, String> {
+            let active_days: Vec<Day> = self
+                .day_checks
+                .iter()
+                .zip(Day::ALL.iter())
+                .filter(|(check, _)| check.check_state() == nwg::CheckBoxState::Checked)
+                .map(|(_, day)| *day)
+                .collect();
             let cfg = Config {
                 host: self.host_input.text().trim().to_string(),
                 interval_secs: parse(&self.interval_input, "Ping interval")?,
                 timeout_ms: parse(&self.timeout_input, "Timeout")?,
                 warn_ms: parse(&self.warn_input, "Amber threshold")?,
                 bad_ms: parse(&self.bad_input, "Red threshold")?,
+                schedule_enabled: self.schedule_check.check_state() == nwg::CheckBoxState::Checked,
+                active_start: self.start_input.text(),
+                active_end: self.end_input.text(),
+                active_days,
+                idle_interval_secs: parse(&self.idle_input, "Outside-hours interval")?,
             };
             cfg.validate()?;
-            Ok(cfg)
+            Ok(cfg.normalized())
         })();
         let config = match parsed {
             Ok(c) => c,
@@ -612,8 +737,14 @@ fn worker_loop(
         }
 
         // Sleep until the next ping, unless a command arrives first. A config
-        // change or "ping now" starts the next ping immediately.
-        match cmd_rx.recv_timeout(Duration::from_secs(cfg.interval_secs)) {
+        // change or "ping now" starts the next ping immediately. With a schedule,
+        // never sleep past the next window boundary so the new rate kicks in on time.
+        let now = LocalTime::now();
+        let mut wait = schedule::interval_secs(&cfg, now);
+        if let Some(until_change) = schedule::secs_until_change(&cfg, now) {
+            wait = wait.min(until_change + 1);
+        }
+        match cmd_rx.recv_timeout(Duration::from_secs(wait.max(1))) {
             Ok(Command::Quit) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(Command::PingNow) | Ok(Command::ConfigChanged) | Err(RecvTimeoutError::Timeout) => {}
         }
@@ -682,6 +813,14 @@ fn create_hicon(img: &Image) -> HICON {
         }
         DeleteObject(color as _);
         hicon
+    }
+}
+
+fn check_state(on: bool) -> nwg::CheckBoxState {
+    if on {
+        nwg::CheckBoxState::Checked
+    } else {
+        nwg::CheckBoxState::Unchecked
     }
 }
 

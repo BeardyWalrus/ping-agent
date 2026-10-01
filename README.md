@@ -8,8 +8,9 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
 - Hover for the host, last result, average, min, max and packet loss over the
   last 60 pings.
 - Right-click (or left-click) the icon for **Ping now**, **Settings...** and **Exit**.
-- Settings window: host, interval, timeout, colour thresholds, and a
-  **Start PingAgent when I sign in to Windows** checkbox.
+- Settings window: host, interval, timeout, colour thresholds, an optional
+  **schedule** (fast pings during chosen hours and days, slow pings otherwise),
+  and a **Start PingAgent when I sign in to Windows** checkbox.
 - Single portable `PingAgent.exe`. No installer, no runtime to install, no admin rights.
 
 ## Download
@@ -32,7 +33,12 @@ the Settings window or by hand (restart the app after hand edits):
   "interval_secs": 5,
   "timeout_ms": 1000,
   "warn_ms": 50,
-  "bad_ms": 150
+  "bad_ms": 150,
+  "schedule_enabled": false,
+  "active_start": "08:00",
+  "active_end": "18:00",
+  "active_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+  "idle_interval_secs": 60
 }
 ```
 
@@ -43,6 +49,16 @@ the Settings window or by hand (restart the app after hand edits):
 | `timeout_ms` | How long to wait for a reply | 100 to 10000 |
 | `warn_ms` | Replies at or above this are amber | > 0 |
 | `bad_ms` | Replies at or above this are red | >= `warn_ms` |
+| `schedule_enabled` | Use the schedule below | `true` / `false` |
+| `active_start` | Start of the active window, local time, 24-hour `HH:MM` | |
+| `active_end` | End of the active window. Earlier than the start means the window runs past midnight; equal to the start means all day | |
+| `active_days` | Days the active window applies to (`Mon` to `Sun`) | at least one when the schedule is on |
+| `idle_interval_secs` | Seconds between pings outside the active window | 1 to 3600 |
+
+With the schedule on, `interval_secs` is used inside the active window and
+`idle_interval_secs` outside it. The day check uses the current calendar day,
+so a 22:00 to 06:00 window on Friday is active until midnight, and after that
+only if Saturday is also ticked. The tray menu shows which rate is in effect.
 
 "Start with Windows" writes a value named `PingAgent` under
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` pointing at
