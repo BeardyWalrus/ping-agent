@@ -61,21 +61,39 @@ jobs:
 
   release:
     name: GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Every merge to main publishes a release so the newest installer is always at
+    # https://github.com/BeardyWalrus/ping-agent/releases/latest/download/PingAgent-Setup.exe
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [test, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: PingAgent-Setup
       - uses: actions/download-artifact@v4
         with:
           name: PingAgent-windows-x64
+      - name: Choose the release tag and name
+        id: meta
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "name=PingAgent ${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "name=PingAgent ${version} build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          generate_release_notes: true
           files: |
             PingAgent-Setup.exe
             PingAgent.exe
-          generate_release_notes: true
