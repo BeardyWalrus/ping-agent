@@ -42,6 +42,22 @@ jobs:
           name: PingAgent-windows-x64
           path: target/release/PingAgent.exe
           if-no-files-found: error
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          & $iscc "/DMyAppVersion=$version" installer\PingAgent.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PingAgent-Setup
+          path: installer/Output/PingAgent-Setup.exe
+          if-no-files-found: error
 
   release:
     name: GitHub release
@@ -53,8 +69,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: PingAgent-Setup
+      - uses: actions/download-artifact@v4
+        with:
           name: PingAgent-windows-x64
       - uses: softprops/action-gh-release@v2
         with:
-          files: PingAgent.exe
+          files: |
+            PingAgent-Setup.exe
+            PingAgent.exe
           generate_release_notes: true

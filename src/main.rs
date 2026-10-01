@@ -13,6 +13,8 @@ mod app;
 mod autostart;
 #[cfg(windows)]
 mod ping;
+#[cfg(windows)]
+mod tray;
 
 #[cfg(windows)]
 fn main() {

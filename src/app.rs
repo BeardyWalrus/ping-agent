@@ -15,8 +15,8 @@ use winapi::um::wingdi::{
     DIB_RGB_COLORS,
 };
 use winapi::um::winuser::{
-    CreateIconIndirect, DestroyIcon, GetSystemMetrics, ModifyMenuW, SetForegroundWindow, ICONINFO,
-    MF_BYCOMMAND, MF_GRAYED, MF_STRING, SM_CXSMICON,
+    CreateIconIndirect, DestroyIcon, GetSystemMetrics, ModifyMenuW, PostMessageW,
+    SetForegroundWindow, ICONINFO, MF_BYCOMMAND, MF_GRAYED, MF_STRING, SM_CXSMICON, WM_NULL,
 };
 
 use crate::autostart;
@@ -25,6 +25,7 @@ use crate::icon::{self, Image, Rgb};
 use crate::ping::Pinger;
 use crate::schedule::{self, Day, LocalTime};
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
+use crate::tray::{self, TrayEvent, TrayIcon};
 
 /// Number of recent results kept for the average / loss figures.
 const HISTORY: usize = 60;
@@ -64,7 +65,7 @@ impl Default for State {
 #[derive(Default)]
 pub struct App {
     window: nwg::MessageWindow,
-    tray: nwg::TrayNotification,
+    tray: RefCell<Option<TrayIcon>>,
     notice: nwg::Notice,
 
     tray_menu: nwg::Menu,
@@ -108,15 +109,22 @@ pub struct App {
 pub struct Ui {
     inner: Rc<App>,
     handlers: RefCell<Vec<nwg::EventHandler>>,
+    raw_handlers: RefCell<Vec<nwg::RawEventHandler>>,
 }
 
 impl Drop for Ui {
     fn drop(&mut self) {
+        for h in self.raw_handlers.borrow_mut().drain(..) {
+            let _ = nwg::unbind_raw_event_handler(&h);
+        }
         for h in self.handlers.borrow_mut().drain(..) {
             nwg::unbind_event_handler(&h);
         }
     }
 }
+
+/// Raw handler ids below 0x10000 are reserved by native-windows-gui.
+const TRAY_RAW_HANDLER_ID: usize = 0x1_0001;
 
 impl std::ops::Deref for Ui {
     type Target = App;
@@ -191,14 +199,16 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     nwg::MessageWindow::builder().build(&mut data.window)?;
 
     let placeholder = render_icon("...", icon::NEUTRAL);
-    let mut first_icon = nwg::Icon::default();
-    first_icon.handle = placeholder as _;
-
-    nwg::TrayNotification::builder()
-        .parent(&data.window)
-        .icon(Some(&first_icon))
-        .tip(Some("PingAgent: starting"))
-        .build(&mut data.tray)?;
+    let hwnd = data
+        .window
+        .handle
+        .hwnd()
+        .ok_or_else(|| nwg::NwgError::initialization("message window has no handle"))?;
+    let mut tray_icon = TrayIcon::new(hwnd);
+    tray_icon
+        .add(placeholder, "PingAgent: starting")
+        .map_err(nwg::NwgError::initialization)?;
+    *data.tray.borrow_mut() = Some(tray_icon);
     data.state.borrow_mut().current_icon = placeholder;
 
     nwg::Notice::builder()
@@ -414,17 +424,37 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     let ui = Ui {
         inner: Rc::new(data),
         handlers: Default::default(),
+        raw_handlers: Default::default(),
     };
+
+    // Clicks on the tray icon arrive as a raw window message on the message window.
+    let weak = Rc::downgrade(&ui.inner);
+    let tray_raw = move |_hwnd, msg, wparam, lparam| {
+        if msg != tray::CALLBACK_MESSAGE {
+            return None;
+        }
+        if let Some(app) = weak.upgrade() {
+            match tray::decode(wparam, lparam) {
+                Some(TrayEvent::ContextMenu { x, y }) | Some(TrayEvent::Select { x, y }) => {
+                    app.show_menu(x, y);
+                }
+                None => {}
+            }
+        }
+        Some(0)
+    };
+    ui.raw_handlers
+        .borrow_mut()
+        .push(nwg::bind_raw_event_handler(
+            &ui.window.handle,
+            TRAY_RAW_HANDLER_ID,
+            tray_raw,
+        )?);
 
     let weak = Rc::downgrade(&ui.inner);
     let tray_events = move |evt, _data, handle: nwg::ControlHandle| {
         let Some(app) = weak.upgrade() else { return };
         match evt {
-            E::OnContextMenu | E::OnMousePress(nwg::MousePressEvent::MousePressLeftUp)
-                if handle == app.tray =>
-            {
-                app.show_menu();
-            }
             E::OnNotice if handle == app.notice => app.on_results(),
             E::OnMenuItemSelected => {
                 if handle == app.menu_ping_now {
@@ -496,6 +526,8 @@ impl App {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+        // Remove the tray icon before destroying the HICON it was showing.
+        self.tray.borrow_mut().take();
         let old = std::mem::replace(
             &mut self.state.borrow_mut().current_icon,
             std::ptr::null_mut(),
@@ -546,9 +578,9 @@ impl App {
 
         let new_icon = render_icon(&icon_text(last), color);
         if !new_icon.is_null() {
-            let mut wrapper = nwg::Icon::default();
-            wrapper.handle = new_icon as _;
-            self.tray.set_icon(&wrapper);
+            if let Some(tray) = self.tray.borrow().as_ref() {
+                tray.set_icon(new_icon);
+            }
             // The shell copies the icon, so the previous one can go now.
             let old = std::mem::replace(&mut self.state.borrow_mut().current_icon, new_icon);
             if !old.is_null() {
@@ -576,7 +608,9 @@ impl App {
         if tip.chars().count() > 127 {
             tip = tip.chars().take(126).collect::<String>() + "…";
         }
-        self.tray.set_tip(&tip);
+        if let Some(tray) = self.tray.borrow().as_ref() {
+            tray.set_tip(&tip);
+        }
 
         set_menu_item_text(&self.menu_status, &status, true);
         set_menu_item_text(&self.menu_stats, &stats_line, true);
@@ -584,9 +618,13 @@ impl App {
         set_menu_item_text(&self.menu_mode, &mode_line, true);
     }
 
-    fn show_menu(&self) {
-        let (x, y) = nwg::GlobalCursor::position();
+    fn show_menu(&self, x: i32, y: i32) {
         self.tray_menu.popup(x, y);
+        // Classic tray-menu quirk: without this the menu can linger after the
+        // user clicks elsewhere.
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
+        }
     }
 
     fn show_settings(&self) {
