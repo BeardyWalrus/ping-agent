@@ -7,7 +7,11 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
   sub-millisecond replies, `X` for a timeout, `?` when the ping could not be sent).
 - Hover for the host, last result, average, min, max and packet loss over the
   last 60 pings.
-- Right-click (or left-click) the icon for **Ping now**, **Settings...** and **Exit**.
+- Right-click (or left-click) the icon for **Ping now**, **History...**, **Settings...** and **Exit**.
+- **History**: every ping is logged to a daily CSV file and kept for a week by
+  default. **History...** opens a chart in your browser: latency over the last
+  hour, 6 hours, day or week with the amber and red thresholds, a strip marking
+  timeouts, hover for exact values, and an hourly table.
 - Settings window: host, interval, timeout, colour thresholds, an optional
   **schedule** (fast pings during chosen hours and days, slow pings otherwise),
   and a **Start PingAgent when I sign in to Windows** checkbox.
@@ -71,6 +75,7 @@ the Settings window or by hand (restart the app after hand edits):
 | `active_end` | End of the active window. Earlier than the start means the window runs past midnight; equal to the start means all day | |
 | `active_days` | Days the active window applies to (`Mon` to `Sun`) | at least one when the schedule is on |
 | `idle_interval_secs` | Seconds between pings outside the active window | 1 to 3600 |
+| `history_days` | Days of ping history to keep on disk; 0 turns logging off | 0 to 365 |
 
 With the schedule on, `interval_secs` is used inside the active window and
 `idle_interval_secs` outside it. The day check uses the current calendar day,
@@ -80,6 +85,22 @@ only if Saturday is also ticked. The tray menu shows which rate is in effect.
 "Start with Windows" writes a value named `PingAgent` under
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` pointing at
 the exe's current location. If you move the exe, untick and re-tick the box.
+
+## History files
+
+Each ping is appended to `%APPDATA%\PingAgent\history\YYYY-MM-DD.csv`:
+
+```
+time,host,rtt_ms,result,detail
+2026-10-01T18:04:05+01:00,192.168.86.1,12,reply,
+2026-10-01T18:04:10+01:00,192.168.86.1,,timeout,
+```
+
+`rtt_ms` is empty when there was no reply; `result` is `reply`, `timeout` or
+`error`. Files older than `history_days` are deleted once a day. A day at
+5-second pings is roughly 600 KB. **History...** rebuilds
+`history\report.html` from these files each time you open it, so the page is a
+snapshot; open it again for fresh data.
 
 ## How it works
 
