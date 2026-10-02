@@ -25,11 +25,9 @@ use crate::autostart;
 use crate::config::{Config, APP_NAME};
 use crate::history::{History, Row};
 use crate::icon::{self, Image, Rgb};
-use crate::mqtt::{MqttConfig, Publisher, Sample};
 use crate::ping::Pinger;
 use crate::report;
 use crate::schedule::{self, Day, LocalTime};
-use crate::secret;
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
 use crate::tray::{self, TrayEvent, TrayIcon};
 
@@ -51,7 +49,6 @@ struct State {
     cmd_tx: Option<Sender<Command>>,
     result_rx: Option<Receiver<PingOutcome>>,
     worker: Option<JoinHandle<()>>,
-    publisher: Option<Publisher>,
 }
 
 impl Default for State {
@@ -65,7 +62,6 @@ impl Default for State {
             cmd_tx: None,
             result_rx: None,
             worker: None,
-            publisher: None,
         }
     }
 }
@@ -83,7 +79,6 @@ pub struct App {
     menu_sep1: nwg::MenuSeparator,
     menu_ping_now: nwg::MenuItem,
     menu_history: nwg::MenuItem,
-    menu_ha: nwg::MenuItem,
     menu_settings: nwg::MenuItem,
     menu_sep2: nwg::MenuSeparator,
     menu_exit: nwg::MenuItem,
@@ -113,23 +108,6 @@ pub struct App {
     autostart_check: nwg::CheckBox,
     path_label: nwg::Label,
 
-    ha_window: nwg::Window,
-    ha_notice: nwg::Notice,
-    ha_enable: nwg::CheckBox,
-    ha_host_label: nwg::Label,
-    ha_host_input: nwg::TextInput,
-    ha_port_label: nwg::Label,
-    ha_port_input: nwg::TextInput,
-    ha_user_label: nwg::Label,
-    ha_user_input: nwg::TextInput,
-    ha_pass_label: nwg::Label,
-    ha_pass_input: nwg::TextInput,
-    ha_name_label: nwg::Label,
-    ha_name_input: nwg::TextInput,
-    ha_hint: nwg::Label,
-    ha_status: nwg::Label,
-    ha_save: nwg::Button,
-    ha_cancel: nwg::Button,
     save_button: nwg::Button,
     cancel_button: nwg::Button,
 
@@ -275,10 +253,6 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .text("&History...")
         .parent(&data.tray_menu)
         .build(&mut data.menu_history)?;
-    nwg::MenuItem::builder()
-        .text("Home &Assistant...")
-        .parent(&data.tray_menu)
-        .build(&mut data.menu_ha)?;
     nwg::MenuItem::builder()
         .text("&Settings...")
         .parent(&data.tray_menu)
@@ -476,110 +450,6 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .parent(&data.settings)
         .build(&mut data.cancel_button)?;
 
-    // --- Home Assistant window -------------------------------------------------------
-    nwg::Window::builder()
-        .flags(nwg::WindowFlags::WINDOW)
-        .size((390, 372))
-        .center(true)
-        .title("PingAgent - Home Assistant")
-        .build(&mut data.ha_window)?;
-    nwg::Notice::builder()
-        .parent(&data.ha_window)
-        .build(&mut data.ha_notice)?;
-
-    nwg::CheckBox::builder()
-        .text("Send results to Home Assistant over MQTT")
-        .position((16, 16))
-        .size((358, 24))
-        .parent(&data.ha_window)
-        .build(&mut data.ha_enable)?;
-
-    let ha_rows: [(&str, &mut nwg::Label, &mut nwg::TextInput, bool, bool); 5] = [
-        (
-            "Broker host (Home Assistant)",
-            &mut data.ha_host_label,
-            &mut data.ha_host_input,
-            false,
-            false,
-        ),
-        (
-            "Port",
-            &mut data.ha_port_label,
-            &mut data.ha_port_input,
-            true,
-            false,
-        ),
-        (
-            "Username",
-            &mut data.ha_user_label,
-            &mut data.ha_user_input,
-            false,
-            false,
-        ),
-        (
-            "Password",
-            &mut data.ha_pass_label,
-            &mut data.ha_pass_input,
-            false,
-            true,
-        ),
-        (
-            "Device name (blank = this PC)",
-            &mut data.ha_name_label,
-            &mut data.ha_name_input,
-            false,
-            false,
-        ),
-    ];
-    let mut y = 54;
-    for (text, label, input, numeric, password) in ha_rows {
-        nwg::Label::builder()
-            .text(text)
-            .position((16, y + 3))
-            .size((180, 22))
-            .parent(&data.ha_window)
-            .build(label)?;
-        let mut flags = nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP;
-        if numeric {
-            flags |= nwg::TextInputFlags::NUMBER;
-        }
-        nwg::TextInput::builder()
-            .position((200, y))
-            .size((174, 26))
-            .flags(flags)
-            .password(if password { Some('●') } else { None })
-            .parent(&data.ha_window)
-            .build(input)?;
-        y += 38;
-    }
-
-    nwg::Label::builder()
-        .text("Needs the Mosquitto broker add-on and the MQTT integration in Home Assistant. The device appears automatically.")
-        .position((16, y))
-        .size((358, 36))
-        .parent(&data.ha_window)
-        .build(&mut data.ha_hint)?;
-    y += 42;
-    nwg::Label::builder()
-        .text("Status: off")
-        .position((16, y))
-        .size((358, 36))
-        .parent(&data.ha_window)
-        .build(&mut data.ha_status)?;
-    y += 42;
-    nwg::Button::builder()
-        .text("Save")
-        .position((206, y))
-        .size((80, 30))
-        .parent(&data.ha_window)
-        .build(&mut data.ha_save)?;
-    nwg::Button::builder()
-        .text("Cancel")
-        .position((294, y))
-        .size((80, 30))
-        .parent(&data.ha_window)
-        .build(&mut data.ha_cancel)?;
-
     // --- Events -----------------------------------------------------------------
     let ui = Ui {
         inner: Rc::new(data),
@@ -621,8 +491,6 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
                     app.send(Command::PingNow);
                 } else if handle == app.menu_history {
                     app.show_history();
-                } else if handle == app.menu_ha {
-                    app.show_ha();
                 } else if handle == app.menu_settings {
                     app.show_settings();
                 } else if handle == app.menu_exit {
@@ -655,21 +523,6 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         settings_events,
     ));
 
-    let weak = Rc::downgrade(&ui.inner);
-    let ha_events = move |evt, _data, handle: nwg::ControlHandle| {
-        let Some(app) = weak.upgrade() else { return };
-        match evt {
-            E::OnButtonClick if handle == app.ha_save => app.save_ha(),
-            E::OnButtonClick if handle == app.ha_cancel => app.ha_window.set_visible(false),
-            E::OnNotice if handle == app.ha_notice => app.update_ha_status(),
-            _ => {}
-        }
-    };
-    ui.handlers.borrow_mut().push(nwg::full_bind_event_handler(
-        &ui.ha_window.handle,
-        ha_events,
-    ));
-
     Ok(ui)
 }
 
@@ -693,21 +546,10 @@ impl App {
         st.cmd_tx = Some(cmd_tx);
         st.result_rx = Some(result_rx);
         st.worker = Some(worker);
-
-        let sender = self.ha_notice.sender();
-        st.publisher = Some(Publisher::start(
-            st.config.mqtt.clone(),
-            st.config.host.clone(),
-            move || sender.notice(),
-        ));
     }
 
     fn shutdown(&self) {
         self.send(Command::Quit);
-        let publisher = self.state.borrow_mut().publisher.take();
-        if let Some(mut p) = publisher {
-            p.shutdown();
-        }
         let worker = self.state.borrow_mut().worker.take();
         if let Some(w) = worker {
             // The worker wakes within one ping timeout; don't make exit feel slow.
@@ -741,35 +583,6 @@ impl App {
             }
         }
         self.refresh();
-        self.publish_latest();
-    }
-
-    /// Send the newest result to Home Assistant, if that is switched on.
-    fn publish_latest(&self) {
-        let st = self.state.borrow();
-        let Some(publisher) = &st.publisher else {
-            return;
-        };
-        if !st.config.mqtt.enabled {
-            return;
-        }
-        let summary = st.stats.summary();
-        let Some(last) = summary.last.as_ref() else {
-            return;
-        };
-        let (latency_ms, reachable, result) = match last {
-            PingOutcome::Reply(d) => (Some(d.as_millis() as u64), true, "reply"),
-            PingOutcome::Timeout => (None, false, "timeout"),
-            PingOutcome::Error(_) => (None, false, "error"),
-        };
-        publisher.publish(Sample {
-            latency_ms,
-            reachable,
-            result,
-            loss_pct: summary.loss_pct,
-            avg_ms: summary.avg_ms,
-            mode: schedule::describe(&st.config, LocalTime::now()),
-        });
     }
 
     /// Redraw the tray icon, tooltip and menu from the current state.
@@ -879,105 +692,6 @@ impl App {
         self.host_input.set_focus();
     }
 
-    fn show_ha(&self) {
-        let cfg = self.state.borrow().config.mqtt.clone();
-        self.ha_enable.set_check_state(check_state(cfg.enabled));
-        self.ha_host_input.set_text(&cfg.host);
-        self.ha_port_input.set_text(&cfg.port.to_string());
-        self.ha_user_input.set_text(&cfg.username);
-        self.ha_pass_input
-            .set_text(&secret::reveal(&cfg.password).unwrap_or_default());
-        self.ha_name_input.set_text(&cfg.device_name);
-        self.update_ha_status();
-        self.ha_window.set_visible(true);
-        if let Some(hwnd) = self.ha_window.handle.hwnd() {
-            unsafe { SetForegroundWindow(hwnd) };
-        }
-        self.ha_host_input.set_focus();
-    }
-
-    fn update_ha_status(&self) {
-        let st = self.state.borrow();
-        let Some(p) = &st.publisher else { return };
-        let status = p.status();
-        let cfg = &st.config.mqtt;
-        let text = if !status.enabled {
-            "Status: off".to_string()
-        } else if status.connected {
-            match &status.last_error {
-                Some(e) => format!(
-                    "Status: connected to {}:{} ({} sent), last problem: {e}",
-                    cfg.host, cfg.port, status.published
-                ),
-                None => format!(
-                    "Status: connected to {}:{}, {} results sent",
-                    cfg.host, cfg.port, status.published
-                ),
-            }
-        } else {
-            match &status.last_error {
-                Some(e) => format!("Status: not connected to {}:{}: {e}", cfg.host, cfg.port),
-                None => format!("Status: connecting to {}:{}...", cfg.host, cfg.port),
-            }
-        };
-        self.ha_status.set_text(&text);
-    }
-
-    fn save_ha(&self) {
-        let port = match self.ha_port_input.text().trim().parse::<u16>() {
-            Ok(p) => p,
-            Err(_) => {
-                nwg::modal_error_message(
-                    &self.ha_window,
-                    "Home Assistant",
-                    "Port must be a number between 1 and 65535.",
-                );
-                return;
-            }
-        };
-        let password = match secret::protect(&self.ha_pass_input.text()) {
-            Ok(p) => p,
-            Err(e) => {
-                nwg::modal_error_message(&self.ha_window, "Home Assistant", &e);
-                return;
-            }
-        };
-        let mqtt_cfg = MqttConfig {
-            enabled: self.ha_enable.check_state() == nwg::CheckBoxState::Checked,
-            host: self.ha_host_input.text().trim().to_string(),
-            port,
-            username: self.ha_user_input.text().trim().to_string(),
-            password,
-            device_name: self.ha_name_input.text().trim().to_string(),
-        };
-        if let Err(msg) = mqtt_cfg.validate() {
-            nwg::modal_error_message(&self.ha_window, "Home Assistant", &msg);
-            return;
-        }
-
-        let (config, save_result) = {
-            let mut st = self.state.borrow_mut();
-            st.config.mqtt = mqtt_cfg;
-            let config = st.config.clone();
-            *st.shared_config.lock().unwrap() = config.clone();
-            (config, st.config.save())
-        };
-        {
-            let st = self.state.borrow();
-            if let Some(p) = &st.publisher {
-                p.reconfigure(config.mqtt.clone(), config.host.clone());
-            }
-        }
-        self.update_ha_status();
-        self.ha_window.set_visible(false);
-        if let Err(e) = save_result {
-            nwg::error_message(
-                "Home Assistant",
-                &format!("Settings were applied but could not be saved: {e}"),
-            );
-        }
-    }
-
     /// Build the HTML history page from the CSV log and open it in the browser.
     fn show_history(&self) {
         let config = self.state.borrow().config.clone();
@@ -1047,7 +761,6 @@ impl App {
                 active_days,
                 idle_interval_secs: parse(&self.idle_input, "Outside-hours interval")?,
                 history_days: parse(&self.history_input, "History days")?,
-                mqtt: self.state.borrow().config.mqtt.clone(),
             };
             cfg.validate()?;
             Ok(cfg.normalized())
@@ -1087,11 +800,6 @@ impl App {
         self.send(Command::ConfigChanged);
         if host_changed {
             self.refresh();
-            // The Home Assistant entities are per target, so re-announce them.
-            let st = self.state.borrow();
-            if let Some(p) = &st.publisher {
-                p.reconfigure(st.config.mqtt.clone(), st.config.host.clone());
-            }
         }
         self.settings.set_visible(false);
 
