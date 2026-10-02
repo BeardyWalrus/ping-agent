@@ -8,9 +8,6 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
 - Hover for the host, last result, average, min, max and packet loss over the
   last 60 pings.
 - Right-click (or left-click) the icon for **Ping now**, **History...**, **Settings...** and **Exit**.
-- **Home Assistant**: optionally publishes every result over MQTT. The PC shows
-  up as a device with latency, average latency, packet loss and reachable
-  entities, created automatically through MQTT discovery.
 - **History**: every ping is logged to a daily CSV file and kept for a week by
   default. **History...** opens a chart in your browser: latency over the last
   hour, 6 hours, day or week with the amber and red thresholds, a strip marking
@@ -88,49 +85,6 @@ only if Saturday is also ticked. The tray menu shows which rate is in effect.
 "Start with Windows" writes a value named `PingAgent` under
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` pointing at
 the exe's current location. If you move the exe, untick and re-tick the box.
-
-## Home Assistant
-
-PingAgent can send every result to Home Assistant over MQTT. One-time setup in
-Home Assistant, if you have not used MQTT there before:
-
-1. **Settings > Add-ons > Add-on store**, install and start **Mosquitto broker**.
-2. **Settings > Devices & services > Add integration > MQTT**, accept the
-   defaults (it finds the add-on).
-3. Create a Home Assistant user for PingAgent (**Settings > People > Users**),
-   or add a login under the Mosquitto add-on's configuration. The broker accepts
-   either.
-
-Then in PingAgent: right-click the icon, **Home Assistant...**, tick **Send
-results to Home Assistant over MQTT**, enter your Home Assistant host or IP,
-leave the port at 1883, enter the username and password, and **Save**. The
-status line in that window shows whether it connected and how many results have
-been sent.
-
-Within a few seconds a device named **"<your PC> ping"** appears under
-**Settings > Devices & services > MQTT** with these entities for the target host:
-
-| Entity | Type | Value |
-| --- | --- | --- |
-| `<host> latency` | sensor, ms | last round-trip time; unknown while the host is not answering |
-| `<host> average latency` | sensor, ms (diagnostic) | average over the last 60 pings |
-| `<host> packet loss` | sensor, % | share of the last 60 pings with no reply |
-| `<host> reachable` | binary sensor, connectivity | on while pings get replies |
-
-Every entity also carries the raw state as attributes (`host`, `result`, `mode`).
-The state message is published on `pingagent/<pc>/<host>/state`, availability on
-`pingagent/<pc>/availability`, so you can use the topics directly too.
-
-Notes:
-
-- The password is stored in `config.json` encrypted with Windows DPAPI, so only
-  your Windows account can read it. Still, give PingAgent its own user.
-- The connection is plain MQTT (no TLS), intended for your home network.
-- If you change the ping target, a new set of entities appears for the new host;
-  the old ones go unavailable and can be deleted from the device page.
-
-Config file keys live under `"mqtt"`: `enabled`, `host`, `port`, `username`,
-`password`, `device_name` (blank means the computer name).
 
 ## History files
 
