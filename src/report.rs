@@ -157,6 +157,20 @@ mod tests {
             } else {
                 outcome
             };
+            // A flaky spell in the last day: rising loss and jitter over three hours.
+            let flaky = end - Duration::hours(9);
+            let outcome = if t >= flaky && t < flaky + Duration::hours(3) {
+                let frac = (t - flaky).num_seconds() as f64 / 10_800.0;
+                if rnd() < 0.02 + 0.5 * frac * frac {
+                    PingOutcome::Timeout
+                } else {
+                    PingOutcome::Reply(StdDuration::from_millis(
+                        (base * 2.0 + rnd() * 40.0 * (1.0 + frac)) as u64,
+                    ))
+                }
+            } else {
+                outcome
+            };
             rows.push(Row {
                 at: t,
                 host: cfg.host.clone(),
