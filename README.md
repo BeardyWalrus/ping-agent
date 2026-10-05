@@ -9,9 +9,12 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
   last 60 pings.
 - Right-click (or left-click) the icon for **Ping now**, **History...**, **Settings...** and **Exit**.
 - **History**: every ping is logged to a daily CSV file and kept for a week by
-  default. **History...** opens a chart in your browser: latency over the last
-  hour, 6 hours, day or week with the amber and red thresholds, a strip marking
-  timeouts, hover for exact values, and an hourly table.
+  default. **History...** opens a SmokePing-style chart in your browser for the
+  last hour, 6 hours, day or week: grey "smoke" shows the spread of every ping in
+  each time step (darker where pings cluster), the median line is coloured by
+  that step's packet loss, and steps with no replies at all are tinted. Hover
+  for the median, middle half, min to max and loss of any step; an hourly table
+  sits underneath.
 - Settings window: host, interval, timeout, colour thresholds, an optional
   **schedule** (fast pings during chosen hours and days, slow pings otherwise),
   and a **Start PingAgent when I sign in to Windows** checkbox.
