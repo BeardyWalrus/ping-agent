@@ -1,4 +1,12 @@
 fn main() {
+    // CI's run number is the build number the self-update compares against
+    // (src/update.rs). A local build has none and reports build 0.
+    println!("cargo:rerun-if-env-changed=GITHUB_RUN_NUMBER");
+    if let Ok(n) = std::env::var("GITHUB_RUN_NUMBER") {
+        if n.trim().parse::<u32>().is_ok() {
+            println!("cargo:rustc-env=PINGAGENT_BUILD={}", n.trim());
+        }
+    }
     println!("cargo:rerun-if-changed=assets/app.ico");
     println!("cargo:rerun-if-changed=assets/app.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

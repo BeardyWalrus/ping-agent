@@ -8,8 +8,9 @@ use winapi::shared::guiddef::GUID;
 use winapi::shared::minwindef::{LPARAM, UINT, WPARAM};
 use winapi::shared::windef::{HICON, HWND};
 use winapi::um::shellapi::{
-    Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIM_SETVERSION, NIN_KEYSELECT, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_KEYSELECT, NIN_SELECT, NOTIFYICONDATAW,
+    NOTIFYICON_VERSION_4,
 };
 use winapi::um::winuser::{WM_APP, WM_CONTEXTMENU};
 
@@ -119,6 +120,21 @@ impl TrayIcon {
     }
 }
 
+impl TrayIcon {
+    /// A one-off notification from the icon, such as "Updated to build 57".
+    pub fn balloon(&self, title: &str, text: &str) {
+        if !self.added {
+            return;
+        }
+        let mut d = self.base(self.use_guid);
+        d.uFlags |= NIF_INFO;
+        copy_tip(&mut d.szInfo, text);
+        copy_tip(&mut d.szInfoTitle, title);
+        d.dwInfoFlags = NIIF_INFO;
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut d) };
+    }
+}
+
 impl Drop for TrayIcon {
     fn drop(&mut self) {
         if self.added {
@@ -128,8 +144,8 @@ impl Drop for TrayIcon {
     }
 }
 
-/// Copy `tip` into the fixed UTF-16 buffer, truncating and NUL-terminating.
-fn copy_tip(dst: &mut [u16; 128], tip: &str) {
+/// Copy `tip` into a fixed UTF-16 buffer, truncating and NUL-terminating.
+fn copy_tip(dst: &mut [u16], tip: &str) {
     let mut n = 0;
     for unit in tip.encode_utf16() {
         if n >= dst.len() - 1 {

@@ -1,6 +1,6 @@
 # 0001. PingAgent updates itself from GitHub releases through its own installer
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-10
 
 ## Context

@@ -42,6 +42,14 @@ pub struct Config {
     pub idle_interval_secs: u64,
     /// Days of ping history to keep on disk. 0 turns history off.
     pub history_days: u64,
+    /// Report the PC's lock state to the desk box.
+    pub desk_enabled: bool,
+    /// The desk box's base address, for example `http://192.168.86.20:3006`.
+    pub desk_url: String,
+    /// The desk token from the box's Settings, sent as `X-Desk-Token`.
+    pub desk_token: String,
+    /// Install new builds from GitHub by itself.
+    pub auto_update: bool,
 }
 
 impl Default for Config {
@@ -58,6 +66,10 @@ impl Default for Config {
             active_days: Day::WEEKDAYS.to_vec(),
             idle_interval_secs: 60,
             history_days: 7,
+            desk_enabled: false,
+            desk_url: String::new(),
+            desk_token: String::new(),
+            auto_update: true,
         }
     }
 }
@@ -140,12 +152,22 @@ impl Config {
                 "History can be kept for at most {MAX_HISTORY_DAYS} days."
             ));
         }
+        if self.desk_enabled {
+            crate::desk::check_url(&self.desk_url).map_err(|e| format!("Desk box address: {e}"))?;
+            if self.desk_token.trim().is_empty() {
+                return Err("Enter the desk token from the box's Settings.".into());
+            }
+        } else if !self.desk_url.trim().is_empty() {
+            crate::desk::check_url(&self.desk_url).map_err(|e| format!("Desk box address: {e}"))?;
+        }
         Ok(())
     }
 
     /// Trim text fields and store times in canonical "HH:MM" form.
     pub fn normalized(mut self) -> Config {
         self.host = self.host.trim().to_string();
+        self.desk_url = self.desk_url.trim().trim_end_matches('/').to_string();
+        self.desk_token = self.desk_token.trim().to_string();
         if let Ok(m) = schedule::parse_hhmm(&self.active_start) {
             self.active_start = schedule::format_hhmm(m);
         }
@@ -209,6 +231,38 @@ mod tests {
         assert_eq!(cfg.idle_interval_secs, 60);
         assert_eq!(cfg.history_days, 7);
         assert_eq!(cfg.active_days, Day::WEEKDAYS.to_vec());
+    }
+
+    #[test]
+    fn old_config_without_desk_fields_still_loads() {
+        let cfg = Config::from_json(r#"{"host":"10.0.0.1","history_days":7}"#).unwrap();
+        assert!(!cfg.desk_enabled);
+        assert_eq!(cfg.desk_url, "");
+        assert_eq!(cfg.desk_token, "");
+        assert!(cfg.auto_update);
+    }
+
+    #[test]
+    fn desk_settings_are_checked_and_tidied() {
+        let cfg = Config::from_json(
+            r#"{"desk_enabled": true, "desk_url": " http://192.168.86.20:3006/ ", "desk_token": " abc "}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.desk_url, "http://192.168.86.20:3006");
+        assert_eq!(cfg.desk_token, "abc");
+        // On without an address or token.
+        assert!(Config::from_json(r#"{"desk_enabled": true, "desk_token": "abc"}"#).is_err());
+        assert!(
+            Config::from_json(r#"{"desk_enabled": true, "desk_url": "http://box:3006"}"#).is_err()
+        );
+        // Not an http address, whether on or off.
+        assert!(Config::from_json(
+            r#"{"desk_enabled": true, "desk_url": "192.168.86.20:3006", "desk_token": "abc"}"#
+        )
+        .is_err());
+        assert!(Config::from_json(r#"{"desk_url": "ftp://box"}"#).is_err());
+        // Off with nothing set is fine.
+        assert!(Config::from_json(r#"{"desk_enabled": false}"#).is_ok());
     }
 
     #[test]

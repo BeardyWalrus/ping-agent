@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::os::windows::ffi::OsStrExt;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Local;
 use native_windows_gui as nwg;
-use winapi::shared::windef::{HBITMAP, HICON};
+use winapi::shared::windef::{HBITMAP, HICON, HWND};
 use winapi::um::wingdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     DIB_RGB_COLORS,
@@ -23,6 +24,7 @@ use winapi::um::winuser::{
 
 use crate::autostart;
 use crate::config::{Config, APP_NAME};
+use crate::desk::{self, DeskMsg, DeskStatus};
 use crate::history::{History, Row};
 use crate::icon::{self, Image, Rgb};
 use crate::ping::Pinger;
@@ -30,9 +32,23 @@ use crate::report;
 use crate::schedule::{self, Day, LocalTime};
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
 use crate::tray::{self, TrayEvent, TrayIcon};
+use crate::update::{self, UpdateMsg, UpdateStatus};
 
 /// Number of recent results kept for the average / loss figures.
 const HISTORY: usize = 60;
+
+// Session lock notifications (wtsapi32), declared here rather than pulling
+// in another winapi feature.
+const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+const WTS_SESSION_LOCK: usize = 0x7;
+const WTS_SESSION_UNLOCK: usize = 0x8;
+const NOTIFY_FOR_THIS_SESSION: u32 = 0;
+
+#[link(name = "wtsapi32")]
+extern "system" {
+    fn WTSRegisterSessionNotification(hwnd: HWND, flags: u32) -> i32;
+    fn WTSUnRegisterSessionNotification(hwnd: HWND) -> i32;
+}
 
 enum Command {
     PingNow,
@@ -49,6 +65,14 @@ struct State {
     cmd_tx: Option<Sender<Command>>,
     result_rx: Option<Receiver<PingOutcome>>,
     worker: Option<JoinHandle<()>>,
+    desk_tx: Option<Sender<DeskMsg>>,
+    desk_status: Arc<Mutex<DeskStatus>>,
+    update_tx: Option<Sender<UpdateMsg>>,
+    update_status: Arc<Mutex<UpdateStatus>>,
+    /// An update waits while the Settings window is open.
+    settings_open: Arc<AtomicBool>,
+    /// Running from the installer's folder, so updates can be installed.
+    installed: bool,
 }
 
 impl Default for State {
@@ -62,6 +86,12 @@ impl Default for State {
             cmd_tx: None,
             result_rx: None,
             worker: None,
+            desk_tx: None,
+            desk_status: Arc::new(Mutex::new(DeskStatus::Starting)),
+            update_tx: None,
+            update_status: Arc::new(Mutex::new(UpdateStatus::Waiting)),
+            settings_open: Arc::new(AtomicBool::new(false)),
+            installed: false,
         }
     }
 }
@@ -71,11 +101,15 @@ pub struct App {
     window: nwg::MessageWindow,
     tray: RefCell<Option<TrayIcon>>,
     notice: nwg::Notice,
+    desk_notice: nwg::Notice,
+    update_notice: nwg::Notice,
 
     tray_menu: nwg::Menu,
     menu_status: nwg::MenuItem,
     menu_stats: nwg::MenuItem,
     menu_mode: nwg::MenuItem,
+    menu_desk: nwg::MenuItem,
+    menu_update: nwg::MenuItem,
     menu_sep1: nwg::MenuSeparator,
     menu_ping_now: nwg::MenuItem,
     menu_history: nwg::MenuItem,
@@ -105,7 +139,13 @@ pub struct App {
     idle_input: nwg::TextInput,
     history_label: nwg::Label,
     history_input: nwg::TextInput,
+    desk_check: nwg::CheckBox,
+    desk_url_label: nwg::Label,
+    desk_url_input: nwg::TextInput,
+    desk_token_label: nwg::Label,
+    desk_token_input: nwg::TextInput,
     autostart_check: nwg::CheckBox,
+    auto_update_check: nwg::CheckBox,
     path_label: nwg::Label,
 
     save_button: nwg::Button,
@@ -133,6 +173,7 @@ impl Drop for Ui {
 
 /// Raw handler ids below 0x10000 are reserved by native-windows-gui.
 const TRAY_RAW_HANDLER_ID: usize = 0x1_0001;
+const SESSION_RAW_HANDLER_ID: usize = 0x1_0002;
 
 impl std::ops::Deref for Ui {
     type Target = App;
@@ -169,10 +210,25 @@ pub fn run() {
     let app = App::default();
     app.state.borrow_mut().config = config.clone();
     *app.state.borrow_mut().shared_config.lock().unwrap() = config;
+    app.state.borrow_mut().installed = match (std::env::current_exe(), dirs::data_local_dir()) {
+        (Ok(exe), Some(local)) => update::is_installed_copy(&exe, &local),
+        _ => false,
+    };
 
     let ui = build_ui(app).expect("Failed to build the user interface");
     ui.start_worker();
+    ui.start_desk();
+    ui.start_updater();
     ui.refresh();
+
+    // The first start after an update says so.
+    if let Some(dir) = Config::path().as_deref().and_then(std::path::Path::parent) {
+        if let Some(build) = update::note_build(dir, update::own_build()) {
+            if let Some(tray) = ui.tray.borrow().as_ref() {
+                tray.balloon(APP_NAME, &format!("Updated to build {build}"));
+            }
+        }
+    }
 
     if let Some(e) = load_error {
         nwg::error_message(
@@ -222,6 +278,12 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     nwg::Notice::builder()
         .parent(&data.window)
         .build(&mut data.notice)?;
+    nwg::Notice::builder()
+        .parent(&data.window)
+        .build(&mut data.desk_notice)?;
+    nwg::Notice::builder()
+        .parent(&data.window)
+        .build(&mut data.update_notice)?;
 
     nwg::Menu::builder()
         .popup(true)
@@ -242,6 +304,16 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .disabled(true)
         .parent(&data.tray_menu)
         .build(&mut data.menu_mode)?;
+    nwg::MenuItem::builder()
+        .text("Desk: off")
+        .disabled(true)
+        .parent(&data.tray_menu)
+        .build(&mut data.menu_desk)?;
+    nwg::MenuItem::builder()
+        .text("Build")
+        .disabled(true)
+        .parent(&data.tray_menu)
+        .build(&mut data.menu_update)?;
     nwg::MenuSeparator::builder()
         .parent(&data.tray_menu)
         .build(&mut data.menu_sep1)?;
@@ -268,7 +340,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     // --- Settings window --------------------------------------------------------
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW)
-        .size((390, 516))
+        .size((390, 676))
         .center(true)
         .title("PingAgent settings")
         .build(&mut data.settings)?;
@@ -416,12 +488,56 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .build(&mut data.history_input)?;
     y += 42;
 
+    // Desk box group: the PC's lock state, for the desk lamp.
+    nwg::CheckBox::builder()
+        .text("Tell the desk box when this PC is locked")
+        .position((16, y + 2))
+        .size((358, 24))
+        .parent(&data.settings)
+        .build(&mut data.desk_check)?;
+    y += 34;
+    nwg::Label::builder()
+        .text("Desk box address")
+        .position((16, y + 3))
+        .size((180, 22))
+        .parent(&data.settings)
+        .build(&mut data.desk_url_label)?;
+    nwg::TextInput::builder()
+        .position((200, y))
+        .size((174, 26))
+        .placeholder_text(Some("http://192.168.86.20:3006"))
+        .flags(nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP)
+        .parent(&data.settings)
+        .build(&mut data.desk_url_input)?;
+    y += 38;
+    nwg::Label::builder()
+        .text("Desk token")
+        .position((16, y + 3))
+        .size((180, 22))
+        .parent(&data.settings)
+        .build(&mut data.desk_token_label)?;
+    nwg::TextInput::builder()
+        .position((200, y))
+        .size((174, 26))
+        .password(Some('\u{2022}'))
+        .flags(nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP)
+        .parent(&data.settings)
+        .build(&mut data.desk_token_input)?;
+    y += 42;
+
     nwg::CheckBox::builder()
         .text("Start PingAgent when I sign in to Windows")
         .position((16, y + 2))
         .size((358, 24))
         .parent(&data.settings)
         .build(&mut data.autostart_check)?;
+    y += 32;
+    nwg::CheckBox::builder()
+        .text("Install new builds automatically")
+        .position((16, y + 2))
+        .size((358, 24))
+        .parent(&data.settings)
+        .build(&mut data.auto_update_check)?;
     y += 36;
 
     let path_text = match Config::path() {
@@ -481,11 +597,38 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
             tray_raw,
         )?);
 
+    // Lock and unlock arrive as WM_WTSSESSION_CHANGE once registered.
+    let weak = Rc::downgrade(&ui.inner);
+    let session_raw = move |_hwnd, msg, wparam, _lparam| {
+        if msg != WM_WTSSESSION_CHANGE {
+            return None;
+        }
+        if let Some(app) = weak.upgrade() {
+            match wparam {
+                WTS_SESSION_LOCK => app.send_desk(DeskMsg::Locked(true)),
+                WTS_SESSION_UNLOCK => app.send_desk(DeskMsg::Locked(false)),
+                _ => {}
+            }
+        }
+        Some(0)
+    };
+    ui.raw_handlers
+        .borrow_mut()
+        .push(nwg::bind_raw_event_handler(
+            &ui.window.handle,
+            SESSION_RAW_HANDLER_ID,
+            session_raw,
+        )?);
+    unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) };
+
     let weak = Rc::downgrade(&ui.inner);
     let tray_events = move |evt, _data, handle: nwg::ControlHandle| {
         let Some(app) = weak.upgrade() else { return };
         match evt {
             E::OnNotice if handle == app.notice => app.on_results(),
+            E::OnNotice if handle == app.desk_notice || handle == app.update_notice => {
+                app.refresh_extras()
+            }
             E::OnMenuItemSelected => {
                 if handle == app.menu_ping_now {
                     app.send(Command::PingNow);
@@ -493,6 +636,8 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
                     app.show_history();
                 } else if handle == app.menu_settings {
                     app.show_settings();
+                } else if handle == app.menu_update {
+                    app.on_update_clicked();
                 } else if handle == app.menu_exit {
                     nwg::stop_thread_dispatch();
                 }
@@ -511,12 +656,20 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
             if handle == app.save_button {
                 app.save_settings();
             } else if handle == app.cancel_button {
-                app.settings.set_visible(false);
+                app.hide_settings();
             } else if handle == app.schedule_check {
                 app.update_schedule_controls();
+            } else if handle == app.desk_check {
+                app.update_desk_controls();
             }
         }
         // OnWindowClose: nwg hides the window by default, which is what we want.
+        if evt == E::OnWindowClose && handle == app.settings {
+            app.state
+                .borrow()
+                .settings_open
+                .store(false, Ordering::SeqCst);
+        }
     };
     ui.handlers.borrow_mut().push(nwg::full_bind_event_handler(
         &ui.settings.handle,
@@ -548,7 +701,117 @@ impl App {
         st.worker = Some(worker);
     }
 
+    fn send_desk(&self, msg: DeskMsg) {
+        if let Some(tx) = &self.state.borrow().desk_tx {
+            let _ = tx.send(msg);
+        }
+    }
+
+    fn send_update(&self, msg: UpdateMsg) {
+        if let Some(tx) = &self.state.borrow().update_tx {
+            let _ = tx.send(msg);
+        }
+    }
+
+    /// The thread that posts the lock state to the desk box.
+    fn start_desk(&self) {
+        let (tx, rx) = channel::<DeskMsg>();
+        let (shared, status) = {
+            let st = self.state.borrow();
+            (st.shared_config.clone(), st.desk_status.clone())
+        };
+        let notice = self.desk_notice.sender();
+        std::thread::Builder::new()
+            .name("desk".into())
+            .spawn(move || {
+                desk::run_reporter(shared, rx, status, desk::HEARTBEAT, desk::post, move || {
+                    notice.notice()
+                })
+            })
+            .expect("failed to start the desk thread");
+        self.state.borrow_mut().desk_tx = Some(tx);
+    }
+
+    /// The thread that checks GitHub for new builds.
+    fn start_updater(&self) {
+        let (tx, rx) = channel::<UpdateMsg>();
+        let (shared, status, env) = {
+            let st = self.state.borrow();
+            let env = update::UpdateEnv {
+                own: update::own_build(),
+                installed: st.installed,
+                temp_dir: std::env::temp_dir(),
+                settings_open: st.settings_open.clone(),
+                first: update::FIRST_CHECK,
+                every: update::EVERY,
+            };
+            (st.shared_config.clone(), st.update_status.clone(), env)
+        };
+        let notice = self.update_notice.sender();
+        std::thread::Builder::new()
+            .name("update".into())
+            .spawn(move || {
+                update::run_updater(
+                    shared,
+                    rx,
+                    status,
+                    env,
+                    || update::fetch_release(update::RELEASES_API),
+                    |release: &update::Release, dir: &std::path::Path| {
+                        update::fetch_verified(release, dir, &update::is_allowed_download)
+                    },
+                    update::launch_setup,
+                    move || notice.notice(),
+                )
+            })
+            .expect("failed to start the update thread");
+        self.state.borrow_mut().update_tx = Some(tx);
+    }
+
+    /// The menu's update line: install now, or open the releases page.
+    fn on_update_clicked(&self) {
+        let status = self.state.borrow().update_status.lock().unwrap().clone();
+        match status {
+            UpdateStatus::Available {
+                can_install: true, ..
+            } => self.send_update(UpdateMsg::InstallNow),
+            UpdateStatus::Available {
+                can_install: false, ..
+            } => open_url(update::RELEASES_PAGE),
+            _ => {}
+        }
+    }
+
+    /// The desk and update lines of the tray menu.
+    fn refresh_extras(&self) {
+        let (desk_line, (update_line, clickable)) = {
+            let st = self.state.borrow();
+            let desk_line = st.desk_status.lock().unwrap().menu_line();
+            let update_line = st
+                .update_status
+                .lock()
+                .unwrap()
+                .menu_item(update::own_build());
+            (desk_line, update_line)
+        };
+        set_menu_item_text(&self.menu_desk, &desk_line, true);
+        set_menu_item_text(&self.menu_update, &update_line, !clickable);
+    }
+
+    fn hide_settings(&self) {
+        self.settings.set_visible(false);
+        self.state
+            .borrow()
+            .settings_open
+            .store(false, Ordering::SeqCst);
+    }
+
     fn shutdown(&self) {
+        if let Some(hwnd) = self.window.handle.hwnd() {
+            unsafe { WTSUnRegisterSessionNotification(hwnd) };
+        }
+        self.send_desk(DeskMsg::Quit);
+        self.send_update(UpdateMsg::Quit);
         self.send(Command::Quit);
         let worker = self.state.borrow_mut().worker.take();
         if let Some(w) = worker {
@@ -648,6 +911,7 @@ impl App {
         set_menu_item_text(&self.menu_stats, &stats_line, true);
         let mode_line = format!("Pinging {}", schedule::describe(&config, LocalTime::now()));
         set_menu_item_text(&self.menu_mode, &mode_line, true);
+        self.refresh_extras();
     }
 
     fn show_menu(&self, x: i32, y: i32) {
@@ -679,6 +943,17 @@ impl App {
         self.history_input
             .set_text(&config.history_days.to_string());
         self.update_schedule_controls();
+        self.desk_check
+            .set_check_state(check_state(config.desk_enabled));
+        self.desk_url_input.set_text(&config.desk_url);
+        self.desk_token_input.set_text(&config.desk_token);
+        self.update_desk_controls();
+        self.auto_update_check
+            .set_check_state(check_state(config.auto_update));
+        self.state
+            .borrow()
+            .settings_open
+            .store(true, Ordering::SeqCst);
         self.autostart_check
             .set_check_state(if autostart::is_enabled() {
                 nwg::CheckBoxState::Checked
@@ -733,6 +1008,13 @@ impl App {
         }
     }
 
+    /// Grey out the desk box fields while its checkbox is off.
+    fn update_desk_controls(&self) {
+        let on = self.desk_check.check_state() == nwg::CheckBoxState::Checked;
+        self.desk_url_input.set_enabled(on);
+        self.desk_token_input.set_enabled(on);
+    }
+
     fn save_settings(&self) {
         let parse = |input: &nwg::TextInput, what: &str| -> Result<u64, String> {
             input
@@ -761,6 +1043,10 @@ impl App {
                 active_days,
                 idle_interval_secs: parse(&self.idle_input, "Outside-hours interval")?,
                 history_days: parse(&self.history_input, "History days")?,
+                desk_enabled: self.desk_check.check_state() == nwg::CheckBoxState::Checked,
+                desk_url: self.desk_url_input.text(),
+                desk_token: self.desk_token_input.text(),
+                auto_update: self.auto_update_check.check_state() == nwg::CheckBoxState::Checked,
             };
             cfg.validate()?;
             Ok(cfg.normalized())
@@ -787,21 +1073,32 @@ impl App {
             }
         }
 
-        let host_changed = {
+        let (host_changed, desk_changed, update_changed) = {
             let mut st = self.state.borrow_mut();
-            let host_changed = st.config.host != config.host;
+            let old = &st.config;
+            let host_changed = old.host != config.host;
+            let desk_changed = old.desk_enabled != config.desk_enabled
+                || old.desk_url != config.desk_url
+                || old.desk_token != config.desk_token;
+            let update_changed = old.auto_update != config.auto_update;
             st.config = config.clone();
             *st.shared_config.lock().unwrap() = config;
             if host_changed {
                 st.stats.clear();
             }
-            host_changed
+            (host_changed, desk_changed, update_changed)
         };
         self.send(Command::ConfigChanged);
+        if desk_changed {
+            self.send_desk(DeskMsg::ConfigChanged);
+        }
+        if update_changed {
+            self.send_update(UpdateMsg::ConfigChanged);
+        }
         if host_changed {
             self.refresh();
         }
-        self.settings.set_visible(false);
+        self.hide_settings();
 
         if !problems.is_empty() {
             nwg::error_message("PingAgent settings", &problems.join("\n\n"));
@@ -964,6 +1261,24 @@ fn open_in_browser(path: &std::path::Path) {
                 path.display(),
                 result as usize
             ),
+        );
+    }
+}
+
+/// Open a web address in the default browser.
+fn open_url(url: &str) {
+    use winapi::um::shellapi::ShellExecuteW;
+    use winapi::um::winuser::SW_SHOWNORMAL;
+    let op: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
         );
     }
 }
