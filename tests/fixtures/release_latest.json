@@ -1,0 +1,23 @@
+{
+  "tag_name": "v0.4.0-build.26",
+  "name": "PingAgent 0.4.0 build 26",
+  "draft": false,
+  "prerelease": false,
+  "html_url": "https://github.com/BeardyWalrus/ping-agent/releases/tag/v0.4.0-build.26",
+  "assets": [
+    {
+      "name": "PingAgent-Setup.exe",
+      "size": 2371478,
+      "digest": "sha256:a9a1a3a25d75dde7515f129c659a00e2ead37fea9ef1448de2674be4f97c9591",
+      "browser_download_url": "https://github.com/BeardyWalrus/ping-agent/releases/download/v0.4.0-build.26/PingAgent-Setup.exe",
+      "content_type": "application/x-msdos-program"
+    },
+    {
+      "name": "PingAgent.exe",
+      "size": 626176,
+      "digest": "sha256:c1ad85548edbb5808af534f8bccaf6e4131b2611c00de2bcde79e7339d1573ff",
+      "browser_download_url": "https://github.com/BeardyWalrus/ping-agent/releases/download/v0.4.0-build.26/PingAgent.exe",
+      "content_type": "application/x-msdos-program"
+    }
+  ]
+}

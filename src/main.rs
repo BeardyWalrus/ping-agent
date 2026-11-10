@@ -3,11 +3,13 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 mod config;
+mod desk;
 mod history;
 mod icon;
 mod report;
 mod schedule;
 mod stats;
+mod update;
 
 #[cfg(windows)]
 mod app;

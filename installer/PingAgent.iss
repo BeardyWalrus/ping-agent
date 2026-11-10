@@ -56,8 +56,22 @@ Root: HKCU; Subkey: "{#MyRunKey}"; ValueType: string; ValueName: "{#MyAppName}";
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall skipifsilent
+; The app's self-update runs this setup with /VERYSILENT /RELAUNCH: start the
+; new copy once it's installed. The earlier "start when I sign in" choice is
+; kept on a silent reinstall (UsePreviousTasks is on by default).
+Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: IsRelaunch
 
 [Code]
+function IsRelaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;
+
 procedure StopRunningApp;
 var
   ResultCode: Integer;
