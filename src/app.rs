@@ -67,6 +67,11 @@ struct State {
     worker: Option<JoinHandle<()>>,
     desk_tx: Option<Sender<DeskMsg>>,
     desk_status: Arc<Mutex<DeskStatus>>,
+    /// A notice from the desk box for the UI thread to show, put here by the
+    /// reporter thread.
+    desk_pending: Arc<Mutex<Option<desk::DeskNotice>>>,
+    /// The page the notification on screen opens when clicked, if any.
+    balloon_link: Option<String>,
     update_tx: Option<Sender<UpdateMsg>>,
     update_status: Arc<Mutex<UpdateStatus>>,
     /// An update waits while the Settings window is open.
@@ -88,6 +93,8 @@ impl Default for State {
             worker: None,
             desk_tx: None,
             desk_status: Arc::new(Mutex::new(DeskStatus::Starting)),
+            desk_pending: Arc::new(Mutex::new(None)),
+            balloon_link: None,
             update_tx: None,
             update_status: Arc::new(Mutex::new(UpdateStatus::Waiting)),
             settings_open: Arc::new(AtomicBool::new(false)),
@@ -144,6 +151,7 @@ pub struct App {
     desk_url_input: nwg::TextInput,
     desk_token_label: nwg::Label,
     desk_token_input: nwg::TextInput,
+    desk_notices_check: nwg::CheckBox,
     autostart_check: nwg::CheckBox,
     auto_update_check: nwg::CheckBox,
     path_label: nwg::Label,
@@ -224,9 +232,7 @@ pub fn run() {
     // The first start after an update says so.
     if let Some(dir) = Config::path().as_deref().and_then(std::path::Path::parent) {
         if let Some(build) = update::note_build(dir, update::own_build()) {
-            if let Some(tray) = ui.tray.borrow().as_ref() {
-                tray.balloon(APP_NAME, &format!("Updated to build {build}"));
-            }
+            ui.show_balloon(APP_NAME, &format!("Updated to build {build}"), None, false);
         }
     }
 
@@ -340,7 +346,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
     // --- Settings window --------------------------------------------------------
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW)
-        .size((390, 676))
+        .size((390, 708))
         .center(true)
         .title("PingAgent settings")
         .build(&mut data.settings)?;
@@ -523,7 +529,14 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         .flags(nwg::TextInputFlags::VISIBLE | nwg::TextInputFlags::TAB_STOP)
         .parent(&data.settings)
         .build(&mut data.desk_token_input)?;
-    y += 42;
+    y += 36;
+    nwg::CheckBox::builder()
+        .text("Show pop-ups from the desk box")
+        .position((16, y + 2))
+        .size((358, 24))
+        .parent(&data.settings)
+        .build(&mut data.desk_notices_check)?;
+    y += 38;
 
     nwg::CheckBox::builder()
         .text("Start PingAgent when I sign in to Windows")
@@ -584,6 +597,7 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
                 Some(TrayEvent::ContextMenu { x, y }) | Some(TrayEvent::Select { x, y }) => {
                     app.show_menu(x, y);
                 }
+                Some(TrayEvent::BalloonClick) => app.on_balloon_click(),
                 None => {}
             }
         }
@@ -626,9 +640,11 @@ fn build_ui(mut data: App) -> Result<Ui, nwg::NwgError> {
         let Some(app) = weak.upgrade() else { return };
         match evt {
             E::OnNotice if handle == app.notice => app.on_results(),
-            E::OnNotice if handle == app.desk_notice || handle == app.update_notice => {
-                app.refresh_extras()
+            E::OnNotice if handle == app.desk_notice => {
+                app.refresh_extras();
+                app.show_desk_notice();
             }
+            E::OnNotice if handle == app.update_notice => app.refresh_extras(),
             E::OnMenuItemSelected => {
                 if handle == app.menu_ping_now {
                     app.send(Command::PingNow);
@@ -716,17 +732,27 @@ impl App {
     /// The thread that posts the lock state to the desk box.
     fn start_desk(&self) {
         let (tx, rx) = channel::<DeskMsg>();
-        let (shared, status) = {
+        let (shared, status, pending) = {
             let st = self.state.borrow();
-            (st.shared_config.clone(), st.desk_status.clone())
+            (
+                st.shared_config.clone(),
+                st.desk_status.clone(),
+                st.desk_pending.clone(),
+            )
         };
         let notice = self.desk_notice.sender();
         std::thread::Builder::new()
             .name("desk".into())
             .spawn(move || {
-                desk::run_reporter(shared, rx, status, desk::HEARTBEAT, desk::post, move || {
-                    notice.notice()
-                })
+                desk::run_reporter(
+                    shared,
+                    rx,
+                    status,
+                    pending,
+                    desk::HEARTBEAT,
+                    desk::post,
+                    move || notice.notice(),
+                )
             })
             .expect("failed to start the desk thread");
         self.state.borrow_mut().desk_tx = Some(tx);
@@ -796,6 +822,38 @@ impl App {
         };
         set_menu_item_text(&self.menu_desk, &desk_line, true);
         set_menu_item_text(&self.menu_update, &update_line, !clickable);
+    }
+
+    /// Put up the notice the desk thread left, if there is one and notices
+    /// are still on. Silent, and a click opens its page on the box.
+    fn show_desk_notice(&self) {
+        let (pending, config) = {
+            let st = self.state.borrow();
+            let pending = st.desk_pending.lock().unwrap().take();
+            (pending, st.config.clone())
+        };
+        let Some(notice) = pending else { return };
+        if !config.desk_enabled || !config.desk_notices {
+            return;
+        }
+        let link = desk::notice_link(&config.desk_url, notice.path.as_deref());
+        self.show_balloon(&notice.title, &notice.text, link, true);
+    }
+
+    /// Show a notification from the tray icon, remembering what a click on
+    /// it should open (nothing when `link` is `None`).
+    fn show_balloon(&self, title: &str, text: &str, link: Option<String>, silent: bool) {
+        self.state.borrow_mut().balloon_link = link;
+        if let Some(tray) = self.tray.borrow().as_ref() {
+            tray.balloon(title, text, silent);
+        }
+    }
+
+    fn on_balloon_click(&self) {
+        let link = self.state.borrow().balloon_link.clone();
+        if let Some(link) = link {
+            open_url(&link);
+        }
     }
 
     fn hide_settings(&self) {
@@ -947,6 +1005,8 @@ impl App {
             .set_check_state(check_state(config.desk_enabled));
         self.desk_url_input.set_text(&config.desk_url);
         self.desk_token_input.set_text(&config.desk_token);
+        self.desk_notices_check
+            .set_check_state(check_state(config.desk_notices));
         self.update_desk_controls();
         self.auto_update_check
             .set_check_state(check_state(config.auto_update));
@@ -1013,6 +1073,7 @@ impl App {
         let on = self.desk_check.check_state() == nwg::CheckBoxState::Checked;
         self.desk_url_input.set_enabled(on);
         self.desk_token_input.set_enabled(on);
+        self.desk_notices_check.set_enabled(on);
     }
 
     fn save_settings(&self) {
@@ -1046,6 +1107,7 @@ impl App {
                 desk_enabled: self.desk_check.check_state() == nwg::CheckBoxState::Checked,
                 desk_url: self.desk_url_input.text(),
                 desk_token: self.desk_token_input.text(),
+                desk_notices: self.desk_notices_check.check_state() == nwg::CheckBoxState::Checked,
                 auto_update: self.auto_update_check.check_state() == nwg::CheckBoxState::Checked,
             };
             cfg.validate()?;
