@@ -48,6 +48,9 @@ pub struct Config {
     pub desk_url: String,
     /// The desk token from the box's Settings, sent as `X-Desk-Token`.
     pub desk_token: String,
+    /// Show the notices the box sends back (such as "Desk air is stuffy") as
+    /// tray notifications. Only matters while `desk_enabled` is on.
+    pub desk_notices: bool,
     /// Install new builds from GitHub by itself.
     pub auto_update: bool,
 }
@@ -69,6 +72,7 @@ impl Default for Config {
             desk_enabled: false,
             desk_url: String::new(),
             desk_token: String::new(),
+            desk_notices: true,
             auto_update: true,
         }
     }
@@ -240,6 +244,18 @@ mod tests {
         assert_eq!(cfg.desk_url, "");
         assert_eq!(cfg.desk_token, "");
         assert!(cfg.auto_update);
+    }
+
+    #[test]
+    fn desk_notices_are_on_unless_turned_off() {
+        // A config file from before notices existed gets them on.
+        let cfg = Config::from_json(
+            r#"{"host":"10.0.0.1","desk_enabled":true,"desk_url":"http://box:3006","desk_token":"abc","auto_update":true}"#,
+        )
+        .unwrap();
+        assert!(cfg.desk_notices);
+        let cfg = Config::from_json(r#"{"desk_notices": false}"#).unwrap();
+        assert!(!cfg.desk_notices);
     }
 
     #[test]

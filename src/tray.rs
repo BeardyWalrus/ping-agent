@@ -9,8 +9,8 @@ use winapi::shared::minwindef::{LPARAM, UINT, WPARAM};
 use winapi::shared::windef::{HICON, HWND};
 use winapi::um::shellapi::{
     Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
-    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_KEYSELECT, NIN_SELECT, NOTIFYICONDATAW,
-    NOTIFYICON_VERSION_4,
+    NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK,
+    NIN_KEYSELECT, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
 };
 use winapi::um::winuser::{WM_APP, WM_CONTEXTMENU};
 
@@ -33,11 +33,13 @@ pub struct TrayIcon {
     added: bool,
 }
 
-/// What the user did to the icon, with the screen position to open a menu at.
+/// What the user did to the icon, with the screen position to open a menu at,
+/// or a click on the notification the icon last put up (`BalloonClick`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     ContextMenu { x: i32, y: i32 },
     Select { x: i32, y: i32 },
+    BalloonClick,
 }
 
 impl TrayIcon {
@@ -122,7 +124,8 @@ impl TrayIcon {
 
 impl TrayIcon {
     /// A one-off notification from the icon, such as "Updated to build 57".
-    pub fn balloon(&self, title: &str, text: &str) {
+    /// `silent` asks the shell not to play its notification sound.
+    pub fn balloon(&self, title: &str, text: &str, silent: bool) {
         if !self.added {
             return;
         }
@@ -131,6 +134,9 @@ impl TrayIcon {
         copy_tip(&mut d.szInfo, text);
         copy_tip(&mut d.szInfoTitle, title);
         d.dwInfoFlags = NIIF_INFO;
+        if silent {
+            d.dwInfoFlags |= NIIF_NOSOUND;
+        }
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut d) };
     }
 }
@@ -158,7 +164,8 @@ fn copy_tip(dst: &mut [u16], tip: &str) {
 }
 
 /// Decode a `CALLBACK_MESSAGE` (NOTIFYICON_VERSION_4 layout: event in the low
-/// word of lParam, cursor position packed in wParam).
+/// word of lParam, cursor position packed in wParam; the position means
+/// nothing for a balloon click).
 pub fn decode(wparam: WPARAM, lparam: LPARAM) -> Option<TrayEvent> {
     let event = (lparam & 0xFFFF) as u32;
     let x = (wparam & 0xFFFF) as u16 as i16 as i32;
@@ -166,6 +173,7 @@ pub fn decode(wparam: WPARAM, lparam: LPARAM) -> Option<TrayEvent> {
     match event {
         WM_CONTEXTMENU => Some(TrayEvent::ContextMenu { x, y }),
         NIN_SELECT | NIN_KEYSELECT => Some(TrayEvent::Select { x, y }),
+        NIN_BALLOONUSERCLICK => Some(TrayEvent::BalloonClick),
         _ => None,
     }
 }

@@ -19,7 +19,8 @@ shows the latest round-trip time, in milliseconds, **as its tray icon**.
   **schedule** (fast pings during chosen hours and days, slow pings otherwise),
   and a **Start PingAgent when I sign in to Windows** checkbox.
 - **Desk box**: optionally tells a [local-docker](https://github.com/BeardyWalrus/local-docker)
-  desk box when the PC is locked or unlocked, so its desk lamp knows you're there.
+  desk box when the PC is locked or unlocked, so its desk lamp knows you're there,
+  and shows the box's notices (such as "Desk air is stuffy") as quiet tray pop-ups.
 - **Updates itself**: an installed copy installs each new build from GitHub
   releases by itself.
 - Small installer, or a single portable `PingAgent.exe`. No runtime to install, no admin rights.
@@ -72,6 +73,7 @@ the Settings window or by hand (restart the app after hand edits):
   "desk_enabled": false,
   "desk_url": "",
   "desk_token": "",
+  "desk_notices": true,
   "auto_update": true
 }
 ```
@@ -92,6 +94,7 @@ the Settings window or by hand (restart the app after hand edits):
 | `desk_enabled` | Post the PC's lock state to the desk box | `true` / `false` |
 | `desk_url` | The desk box's address, for example `http://192.168.86.20:3006` | `http://` or `https://`; needed when `desk_enabled` is on |
 | `desk_token` | The desk token from the box's Settings | needed when `desk_enabled` is on |
+| `desk_notices` | Show the box's notices as tray pop-ups (only while `desk_enabled` is on) | `true` / `false`; on if missing |
 | `auto_update` | Install new builds by itself | `true` / `false` |
 
 With the schedule on, `interval_secs` is used inside the active window and
@@ -114,6 +117,28 @@ without a post, which covers sleep and shutdown. A failed post isn't retried
 early: the next one is 30 seconds later. The tray menu shows how the last post
 went: **Desk: token wrong** (the box said 401), **Desk: no token set on the
 box** (503) or **Desk: box not answering**.
+
+### Pop-ups from the box
+
+The box can put a `notice` in its reply to a post, for example when the desk
+air has been stuffy for a while:
+
+```json
+{"ok": true, "locked": false,
+ "notice": {"id": "co2-1794405600", "title": "Desk air is stuffy",
+            "text": "CO2 has been over 1200 ppm for 10 minutes (now 1340). Open a window or door for a few minutes.",
+            "path": "/air"}}
+```
+
+With **Show pop-ups from the desk box** ticked (the default), PingAgent shows
+it as a tray notification, without a sound, once per `id` (the box repeats a
+notice for about 2 minutes in case a reply goes missing; PingAgent remembers
+the last 16 ids it showed). Clicking the notification opens `desk_url` plus
+`path` in the browser, for example `http://192.168.86.20:3006/air`. A `path`
+must start with a single `/` and contain no `//`, `\`, `:`, spaces or
+control characters, or the click does nothing. Titles over 63 characters and
+texts over 255 are cut short, as Windows allows no more. Untick the box to
+ignore notices; reporting the lock state carries on.
 
 The box's side, and what the lamp does with it, is in local-docker's
 `docs/desk-presence.md`.
