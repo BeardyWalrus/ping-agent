@@ -9,6 +9,7 @@ mod icon;
 mod report;
 mod schedule;
 mod stats;
+mod toast;
 mod update;
 
 #[cfg(windows)]

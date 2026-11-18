@@ -1,6 +1,6 @@
 # 0002. Desk notices ride on the presence reply and show as a tray notification
 
-- Status: Accepted
+- Status: Accepted; how a notice is shown is superseded by [0003](0003-desk-notices-stay-until-dismissed.md)
 - Date: 2026-11-11
 
 ## Context

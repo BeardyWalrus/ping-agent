@@ -1,6 +1,6 @@
 [package]
 name = "ping-agent"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "System tray ping monitor for Windows: shows the current ping in milliseconds as the tray icon."
@@ -28,6 +28,7 @@ winapi = { version = "0.3", features = [
     "winuser", "wingdi", "windef", "minwindef", "ntdef", "errhandlingapi", "guiddef",
     "shellapi", "synchapi", "handleapi", "winerror",
 ] }
+windows = { version = "0.58", features = ["Data_Xml_Dom", "UI_Notifications"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation", "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock", "Win32_System_Registry", "Win32_Security",

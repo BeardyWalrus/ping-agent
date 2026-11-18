@@ -31,6 +31,7 @@ use crate::ping::Pinger;
 use crate::report;
 use crate::schedule::{self, Day, LocalTime};
 use crate::stats::{icon_text, outcome_label, PingOutcome, Stats};
+use crate::toast;
 use crate::tray::{self, TrayEvent, TrayIcon};
 use crate::update::{self, UpdateMsg, UpdateStatus};
 
@@ -208,6 +209,12 @@ pub fn run() {
             "PingAgent is already running. Look for it in the system tray.",
         );
         return;
+    }
+
+    // Lets desk notices show as toasts that stay until dismissed. If it
+    // fails, they fall back to the tray balloon.
+    if let Err(e) = toast::register_app_id() {
+        eprintln!("could not register for toasts: {e}");
     }
 
     let (config, load_error) = match Config::load() {
@@ -837,7 +844,11 @@ impl App {
             return;
         }
         let link = desk::notice_link(&config.desk_url, notice.path.as_deref());
-        self.show_balloon(&notice.title, &notice.text, link, true);
+        // A toast that stays until dismissed; the plain balloon, which fades
+        // by itself, only if Windows won't take the toast.
+        if toast::show_desk(&notice.title, &notice.text, link.as_deref()).is_err() {
+            self.show_balloon(&notice.title, &notice.text, link, true);
+        }
     }
 
     /// Show a notification from the tray icon, remembering what a click on
