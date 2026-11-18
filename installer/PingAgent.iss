@@ -48,9 +48,12 @@ Name: "autostart"; Description: "Start {#MyAppName} when I sign in to Windows"; 
 Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
+; The app id lets Windows show desk notices as toasts that stay until dismissed.
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; AppUserModelID: "BeardyWalrus.PingAgent"
 
 [Registry]
+; The app writes this too on every start; the uninstaller removes it.
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\BeardyWalrus.PingAgent"; ValueType: string; ValueName: "DisplayName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey
 ; Same value the app's own "Start with Windows" checkbox manages.
 Root: HKCU; Subkey: "{#MyRunKey}"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExe}"""; Tasks: autostart
 

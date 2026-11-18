@@ -131,12 +131,16 @@ air has been stuffy for a while:
 ```
 
 With **Show pop-ups from the desk box** ticked (the default), PingAgent shows
-it as a tray notification, without a sound, once per `id` (the box repeats a
-notice for about 2 minutes in case a reply goes missing; PingAgent remembers
-the last 16 ids it showed). Clicking the notification opens `desk_url` plus
-`path` in the browser, for example `http://192.168.86.20:3006/air`. A `path`
-must start with a single `/` and contain no `//`, `\`, `:`, spaces or
-control characters, or the click does nothing. Titles over 63 characters and
+it as a Windows notification that **stays on screen until you dismiss it**,
+without a sound, once per `id` (the box repeats a notice for about 2 minutes
+in case a reply goes missing; PingAgent remembers the last 16 ids it showed).
+It has **Open** and **Dismiss** buttons; Open, or a click on the notification,
+opens `desk_url` plus `path` in the browser, for example
+`http://192.168.86.20:3006/air`. A newer notice replaces the one on screen. A
+`path` must start with a single `/` and contain no `//`, `\`, `:`, spaces or
+control characters, or there's no Open button. If Windows won't take the
+notification, PingAgent falls back to the plain tray pop-up, which fades by
+itself. Titles over 63 characters and
 texts over 255 are cut short, as Windows allows no more. Untick the box to
 ignore notices; reporting the lock state carries on.
 
