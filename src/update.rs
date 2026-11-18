@@ -305,6 +305,8 @@ pub fn note_build(dir: &Path, own: u32) -> Option<u32> {
 pub enum UpdateStatus {
     LocalBuild,
     Waiting,
+    /// Asking GitHub for the latest release.
+    Checking,
     UpToDate,
     /// Newer build out, not being installed: auto-update is off, or this
     /// copy isn't the installed one.
@@ -323,8 +325,9 @@ impl UpdateStatus {
     pub fn menu_item(&self, own: u32) -> (String, bool) {
         match self {
             UpdateStatus::LocalBuild => ("Local build, no updates".into(), false),
-            UpdateStatus::Waiting => (format!("Build {own}"), false),
-            UpdateStatus::UpToDate => (format!("Build {own}, up to date"), false),
+            UpdateStatus::Waiting => (format!("Build {own}: check for updates"), true),
+            UpdateStatus::Checking => (format!("Build {own}: checking for updates..."), false),
+            UpdateStatus::UpToDate => (format!("Build {own}, up to date: check again"), true),
             UpdateStatus::Available {
                 build,
                 can_install: true,
@@ -334,7 +337,7 @@ impl UpdateStatus {
                 can_install: false,
             } => (format!("Build {build} is out"), true),
             UpdateStatus::Installing { build } => (format!("Installing build {build}..."), false),
-            UpdateStatus::Failed(e) => (format!("Update check failed: {e}"), false),
+            UpdateStatus::Failed(e) => (format!("Update check failed: {e}. Try again"), true),
         }
     }
 }
@@ -342,6 +345,9 @@ impl UpdateStatus {
 pub enum UpdateMsg {
     /// The menu's "Install build N".
     InstallNow,
+    /// The menu's "check for updates" or "check again": ask GitHub now
+    /// rather than at the next 6-hourly check.
+    CheckNow,
     ConfigChanged,
     Quit,
 }
@@ -412,6 +418,7 @@ pub fn run_updater(
     loop {
         if do_check {
             clean_old_setups(&env.temp_dir);
+            set(UpdateStatus::Checking);
             match check() {
                 Err(e) => set(UpdateStatus::Failed(e)),
                 Ok(r) if !is_newer(env.own, r.build) => {
@@ -444,7 +451,9 @@ pub fn run_updater(
                     }
                 }
             }
-            Ok(UpdateMsg::ConfigChanged) | Err(RecvTimeoutError::Timeout) => do_check = true,
+            Ok(UpdateMsg::ConfigChanged | UpdateMsg::CheckNow) | Err(RecvTimeoutError::Timeout) => {
+                do_check = true
+            }
         }
     }
 }
@@ -644,8 +653,13 @@ mod tests {
     fn menu_items() {
         assert_eq!(
             UpdateStatus::UpToDate.menu_item(30),
-            ("Build 30, up to date".into(), false)
+            ("Build 30, up to date: check again".into(), true)
         );
+        assert_eq!(
+            UpdateStatus::Waiting.menu_item(30),
+            ("Build 30: check for updates".into(), true)
+        );
+        assert!(!UpdateStatus::Checking.menu_item(30).1);
         assert_eq!(
             UpdateStatus::Available {
                 build: 31,
@@ -662,7 +676,7 @@ mod tests {
             .menu_item(30),
             ("Build 31 is out".into(), true)
         );
-        assert!(!UpdateStatus::Failed("x".into()).menu_item(30).1);
+        assert!(UpdateStatus::Failed("x".into()).menu_item(30).1);
     }
 
     struct Run {
@@ -673,6 +687,25 @@ mod tests {
     }
 
     fn start(own: u32, installed: bool, auto: bool, latest: u32, settings_open: bool) -> Run {
+        let latest = Arc::new(std::sync::atomic::AtomicU32::new(latest));
+        start_with(
+            own,
+            installed,
+            auto,
+            latest,
+            settings_open,
+            Duration::from_millis(10),
+        )
+    }
+
+    fn start_with(
+        own: u32,
+        installed: bool,
+        auto: bool,
+        latest: Arc<std::sync::atomic::AtomicU32>,
+        settings_open: bool,
+        first: Duration,
+    ) -> Run {
         let shared = Arc::new(Mutex::new(Config {
             auto_update: auto,
             ..Config::default()
@@ -686,7 +719,7 @@ mod tests {
             installed,
             temp_dir: temp_dir("loop"),
             settings_open: Arc::new(AtomicBool::new(settings_open)),
-            first: Duration::from_millis(10),
+            first,
             every: Duration::from_secs(60),
         };
         let worker = std::thread::spawn(move || {
@@ -695,7 +728,7 @@ mod tests {
                 rx,
                 s2,
                 env,
-                move || Ok(release(latest)),
+                move || Ok(release(latest.load(Ordering::SeqCst))),
                 |r, dir| Ok(dir.join(format!("PingAgent-Setup-{}.exe", r.build))),
                 move |p| {
                     launch_tx.send(p.to_path_buf()).unwrap();
@@ -794,6 +827,46 @@ mod tests {
         let run = start(55, true, true, 57, true);
         settle();
         assert!(run.launched.try_recv().is_err());
+        run.tx.send(UpdateMsg::Quit).unwrap();
+        run.worker.join().unwrap();
+    }
+
+    #[test]
+    fn check_now_finds_a_build_released_since_the_last_check() {
+        let latest = Arc::new(std::sync::atomic::AtomicU32::new(35));
+        let run = start_with(
+            35,
+            true,
+            true,
+            latest.clone(),
+            false,
+            Duration::from_millis(10),
+        );
+        settle();
+        assert_eq!(*run.status.lock().unwrap(), UpdateStatus::UpToDate);
+        latest.store(38, Ordering::SeqCst);
+        run.tx.send(UpdateMsg::CheckNow).unwrap();
+        assert!(run
+            .launched
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .ends_with("PingAgent-Setup-38.exe"));
+        run.tx.send(UpdateMsg::Quit).unwrap();
+        run.worker.join().unwrap();
+    }
+
+    #[test]
+    fn check_now_skips_the_first_minute_wait() {
+        let latest = Arc::new(std::sync::atomic::AtomicU32::new(38));
+        let run = start_with(35, true, true, latest, false, Duration::from_secs(60));
+        settle();
+        assert!(run.launched.try_recv().is_err());
+        run.tx.send(UpdateMsg::CheckNow).unwrap();
+        assert!(run
+            .launched
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .ends_with("PingAgent-Setup-38.exe"));
         run.tx.send(UpdateMsg::Quit).unwrap();
         run.worker.join().unwrap();
     }
