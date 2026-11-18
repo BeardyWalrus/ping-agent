@@ -811,6 +811,9 @@ impl App {
             UpdateStatus::Available {
                 can_install: false, ..
             } => open_url(update::RELEASES_PAGE),
+            UpdateStatus::Waiting | UpdateStatus::UpToDate | UpdateStatus::Failed(_) => {
+                self.send_update(UpdateMsg::CheckNow)
+            }
             _ => {}
         }
     }

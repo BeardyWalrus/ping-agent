@@ -152,7 +152,9 @@ The box's side, and what the lamp does with it, is in local-docker's
 Each release is tagged `v<version>-build.<N>`, and the exe carries its own N
 (the tray menu shows it). An installed copy, one running from
 `%LOCALAPPDATA%\Programs\PingAgent`, checks the latest release a minute after
-it starts and every 6 hours after that. When N is higher than its own it:
+it starts and every 6 hours after that. To check straight away, click the
+build line in the tray menu (**Build N: check for updates** or **Build N, up to
+date: check again**). When N is higher than its own it:
 
 1. downloads `PingAgent-Setup.exe` from GitHub (only from `github.com` and
    `*.githubusercontent.com`, over HTTPS) into the temp folder;
